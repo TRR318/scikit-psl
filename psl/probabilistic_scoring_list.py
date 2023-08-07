@@ -5,7 +5,6 @@ from scipy.stats import entropy as stats_entropy
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
-from sklearn.model_selection import cross_val_score
 
 
 class _ClassifierAtK(BaseEstimator, ClassifierMixin):
@@ -69,7 +68,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         """ IMPORTANT: Shannon entropy is calculated with respect to base 2
         """
         self.logger = logging.getLogger(__name__)
-        self.score_set = sorted(score_set)[::-1]
+        self.score_set = score_set
+        self.sorted_score_set = sorted(self.score_set, reverse=True)
         self.entropy_threshold = entropy_threshold
         self.X = None
         self.y = None
@@ -111,7 +111,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             classifier_at_k = None
 
             # try all features and possible scores
-            fk, sk = remaining_feature_indices[0], self.score_set[-1]
+            fk, sk = remaining_feature_indices[0], self.sorted_score_set[-1]
             current_expected_entropy = np.inf
 
             if predefined_features is None:
@@ -119,7 +119,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             else:
                 features_to_consider = [predefined_features[stage - 1]]
 
-            scores_to_consider = self.score_set if predefined_scores is None else [predefined_scores[stage - 1]]
+            scores_to_consider = self.sorted_score_set if predefined_scores is None else [predefined_scores[stage - 1]]
 
             for f in features_to_consider:
                 cand_features = self.features + [f]
@@ -168,15 +168,12 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
 if __name__ == '__main__':
     from sklearn.datasets import make_classification
+    from sklearn.model_selection import cross_val_score
 
-    logging.basicConfig()
     # Generating synthetic data with continuous features and a binary target variable
     X, y = make_classification(n_samples=100, n_features=10, n_informative=10, n_redundant=0, random_state=42)
-    X = (X > .2).astype(int)
+    X = (X > .5).astype(int)
 
     clf = ProbabilisticScoringList([-1, 1, 2])
-    #print(cross_val_score(clf, X, y, cv=5))
-
-
-    print(clf.fit(X, y).predict_proba(X))
+    print(cross_val_score(clf, X, y, cv=5))
 
