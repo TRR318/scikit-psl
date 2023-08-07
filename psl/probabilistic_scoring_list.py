@@ -1,124 +1,75 @@
-from itertools import chain, combinations
+import logging
 
 import numpy as np
-from scipy.stats import entropy
+from scipy.stats import entropy as stats_entropy
 from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
+from sklearn.model_selection import cross_val_score
 
 
-class _ClassifierAtK:
+class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     """Internal class for the classifier at stage k of the probabilistic scoring list
-    This allows for easy calibration using the SKLearn interface 
+    This allows for easy calibration using the SKLearn interface
     """
 
     def __init__(self, scores, features) -> None:
-        self._estimator_type = "classifier"
-        # self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(__name__)
+        self.scores = np.array(scores)
         self.features = features
-        self.scores = scores
-        self.total_scores = []
-        self.entropy = None
+        self.score_sums = {}
         self.probabilities = {}
+        self.entropy = None
         self.calibrator = None
 
     def fit(self, X, y):
-        # train classifier
-        self.total_scores = self._compute_possible_total_scores()
-        temp_X = X[:, self.features]
+        n = X.shape[0]
+        relevant_scores = self._relevant_scores(X)
 
-        self.score_vector = np.array(self.scores)
-        base_probabilities = self._compute_probability_distribution(temp_X, y, self.score_vector, self.total_scores)
+        # compute all possible total scores using subset-summation
+        self.score_sums = {0}
+        for score in self.scores:
+            self.score_sums |= {prev_sum + score for prev_sum in self.score_sums}
 
-        T_xi = np.sum((temp_X * self.score_vector), axis=1)
-        Ts = np.array(list(base_probabilities.keys()))
-
-        # calibrate probabilities TODO check this carefully
-        calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
-        calibrator.fit(T_xi, y)
-        self.calibrator = calibrator
+        # calibrate probabilities
+        self.calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
+        self.calibrator.fit(relevant_scores, y)
 
         # compute calibrated probabilities
-        sigmaK = np.array(list(self.total_scores))
+        sigmaK = np.array(sorted(self.score_sums))
         cal_ps = self.calibrator.predict(sigmaK)
 
         # set calibrated probabilities
         self.probabilities = {T: p for T, p in zip(sigmaK, cal_ps)}
-        self.entropy = self._compute_expected_entropy(X)
+        self.entropy = 0
+        for ti, pi in self.probabilities.items():
+            Ni = np.count_nonzero(relevant_scores == ti)
+            Hi = stats_entropy([pi, 1 - pi], base=2)
+            self.entropy += (Ni / n) * Hi
+
         return self
 
     def predict(self, X):
-        probas = self.predict_proba(X)
-        return probas.argmax(axis=1)
+        return self.predict_proba(X).argmax(axis=1)
 
     def predict_proba(self, X):
-        """Predicts the probability for 
+        """Predicts the probability for
         """
-        S = np.array(self.scores)
-        temp_X = X[:, self.features]
-        mat_Ni = temp_X * S
-        current_scores = np.sum(mat_Ni, axis=1)
-        proba_true = np.vectorize(self.probabilities.get)(current_scores)
-        proba = np.vstack([1 - proba_true.T, proba_true.T])
-        return proba.T
+        proba_true = np.vectorize(self.probabilities.get)(self._relevant_scores(X))
+        proba = np.vstack([1 - proba_true, proba_true]).T
+        return proba
 
     # Helper functions
-    def _estimate_probability(self, X, y, S, T):
-        """Private helper to estimate probability (\tilde{p} in the paper)
-        """
-        return self._get_Pi(X, y, S, T) / self._get_Ni(X, S, T)
-
-    def _compute_possible_total_scores(self):
-        """Private helper to compute the set of all possible total scores
-        """
-        possible_values = set()
-        for subset in powerset(self.scores):
-            possible_values.add(sum(subset))
-        return possible_values
-
-    def _get_Ni(self, X, S, T):
-        mat_Ni = X * S
-        Ts_Ni = np.sum(mat_Ni, axis=1)
-        Ni = np.count_nonzero(Ts_Ni == T)
-        return Ni
-
-    def _get_Pi(self, X, y, S, T):
-        X_true = X[y > 0]
-        mat_Pi = X_true * S
-        Ts_Pi = np.sum(mat_Pi, axis=1)
-        Pi = np.count_nonzero(Ts_Pi == T)
-        return Pi
-
-    def _compute_probability_distribution(self, X, y, score_vector, total_scores):
-        probability_distribution = {}
-        for ti in total_scores:
-            Ni = self._get_Ni(X, score_vector, ti)
-            if Ni == 0:
-                continue
-            N = X.shape[0]
-            pi = self._estimate_probability(X, y, score_vector, ti)
-            probability_distribution[ti] = pi
-        return probability_distribution
-
-    def _compute_expected_entropy(self, X):
-        temp_X = X[:, self.features]
-        sum = 0
-        N = temp_X.shape[0]
-        for ti, pi in self.probabilities.items():
-            Ni = self._get_Ni(temp_X, self.score_vector, ti)
-            Hi = entropy([pi, 1 - pi], base=2)
-            sum += (Ni / N) * Hi
-        return sum
+    def _relevant_scores(self, X):
+        return np.sum(X[:, self.features] * self.scores, axis=1)
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
-    def __init__(self, entropy_threshold, score_set):
+    def __init__(self, score_set, entropy_threshold=-1):
         """ IMPORTANT: Shannon entropy is calculated with respect to base 2
         """
-        # self.logger = logging.getLogger(__name__)
-        self._estimator_type = "classifier"
-        self.calibrator = None
-        self.score_set = score_set
-        self.score_set = sorted(self.score_set)[::-1]
+        self.logger = logging.getLogger(__name__)
+        self.score_set = sorted(score_set)[::-1]
         self.entropy_threshold = entropy_threshold
         self.X = None
         self.y = None
@@ -157,6 +108,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         while remaining_feature_indices and expected_entropy > self.entropy_threshold:
             stage += 1
+            classifier_at_k = None
+
             # try all features and possible scores
             fk, sk = remaining_feature_indices[0], self.score_set[-1]
             current_expected_entropy = np.inf
@@ -194,7 +147,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         """
         Predicts a probabilistic scoring list to the given data
         :param X: Dataset to predict the probabilities for
-        :param k: Classfier stage to use for prediction
+        :param k: Classifier stage to use for prediction
         :return:
         """
 
@@ -204,13 +157,26 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         """
         Predicts the probability using the k-th or last classifier
         :param X: Dataset to predict the probabilities for
-        :param k: Classfier stage to use for prediction
+        :param k: Classifier stage to use for prediction
         :return:
         """
+        if not self.classifier_at_k:
+            raise NotFittedError("Please fit the probabilistic scoring classifier before usage.")
 
         return self.classifier_at_k[k].predict_proba(X)
 
 
-def powerset(iterable):
-    s = list(iterable)
-    return chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))
+if __name__ == '__main__':
+    from sklearn.datasets import make_classification
+
+    logging.basicConfig()
+    # Generating synthetic data with continuous features and a binary target variable
+    X, y = make_classification(n_samples=100, n_features=10, n_informative=10, n_redundant=0, random_state=42)
+    X = (X > .2).astype(int)
+
+    clf = ProbabilisticScoringList([-1, 1, 2])
+    #print(cross_val_score(clf, X, y, cv=5))
+
+
+    print(clf.fit(X, y).predict_proba(X))
+
