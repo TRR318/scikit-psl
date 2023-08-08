@@ -2,3 +2,4 @@
 /dist
 
 poetry.lock
+/docs/_build/
