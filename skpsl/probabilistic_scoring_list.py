@@ -20,12 +20,10 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
         self.logger = logging.getLogger(__name__)
         self.scores_vec = np.array(scores)
-        self.probabilities = {}
-        self.entropy = None
+        self.probabilities = None
 
     def fit(self, X, y) -> "_ClassifierAtK":
         scores = self._scores_per_record(X)
-        n = scores.size
 
         # compute all possible total scores using subset-summation
         total_scores = {0}
@@ -38,26 +36,40 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         calibrator.fit(scores, y)
         self.probabilities = {T: p for T, p in zip(total_scores, calibrator.transform(total_scores))}
 
-        # TODO. this should actually be inside of a score function. the actual fitting is finished at this point
-        total_scores, score_freqs = np.unique(scores, return_counts=True)
-        score_probas = np.array([self.probabilities[ti] for ti in total_scores])
-        entropy_values = stats_entropy([score_probas, 1 - score_probas], base=2)
-        self.entropy = np.sum((score_freqs / n) * entropy_values)
-
         return self
 
     def predict(self, X):
+        if self.probabilities is None:
+            raise NotFittedError()
         return self.predict_proba(X).argmax(axis=1)
 
     def predict_proba(self, X):
         """Predicts the probability for
         """
+        if self.probabilities is None:
+            raise NotFittedError()
         scores = self._scores_per_record(X)
         proba_true = np.empty_like(scores, dtype=float)
         for total_score in np.unique(scores):
             proba_true[scores == total_score] = self.probabilities[total_score]
         proba = np.vstack([1 - proba_true, proba_true]).T
         return proba
+
+    def score(self, X, y=None, sample_weight=None):
+        """
+        Calculates the expected entropy of the fitted model
+        :param X:
+        :param y:
+        :param sample_weight:
+        :return:
+        """
+        if self.probabilities is None:
+            raise NotFittedError()
+        scores = self._scores_per_record(X)
+        total_scores, score_freqs = np.unique(scores, return_counts=True)
+        score_probas = np.array([self.probabilities[ti] for ti in total_scores])
+        entropy_values = stats_entropy([score_probas, 1 - score_probas], base=2)
+        return np.sum((score_freqs / scores.size) * entropy_values)
 
     # Helper functions
     def _scores_per_record(self, X):
@@ -119,7 +131,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         curr_stage_clf = self._stage_clf(features=[], scores=[])
         curr_stage_clf.fit(X, y)
         self.stage_clfs.append(curr_stage_clf)
-        expected_entropy = curr_stage_clf.entropy
+        expected_entropy = curr_stage_clf.score(X)
 
         while remaining_features and expected_entropy > self.entropy_threshold:
             stage += 1
@@ -170,7 +182,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     @staticmethod
     def _optimize(features, feature_extension, scores, score_extension, clfcls, X, y):
         clf = clfcls(features=features + feature_extension, scores=scores + score_extension).fit(X, y)
-        return clf, clf.entropy, feature_extension[0], score_extension[0]
+        return clf, clf.score(X), feature_extension[0], score_extension[0]
 
     @staticmethod
     def _gen_lookahead(list_, lookahead):
