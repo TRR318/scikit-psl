@@ -1,16 +1,16 @@
-[![License](https://img.shields.io/github/license/stheid/sklearn-psl)](https://github.com/stheid/sklearn-psl/blob/master/LICENSE)
-[![Pip](https://img.shields.io/pypi/v/:sklearn-psl)](https://pypi.org/project/sklearn-psl)
+[![License](https://img.shields.io/github/license/stheid/scikit-psl)](https://github.com/stheid/scikit-psl/blob/master/LICENSE)
+[![Pip](https://img.shields.io/pypi/v/:scikit-psl)](https://pypi.org/project/scikit-psl)
 
 # Probabilistic Scoring Lists
 
 # Install
 ```bash
-pip install psl
+pip install scikit-psl
 ```
 
 # Usage
 ```python
-from psl import ProbabilisticScoringList
+from skpsl import ProbabilisticScoringList
 from sklearn.datasets import make_classification
 from sklearn.model_selection import cross_val_score
 
