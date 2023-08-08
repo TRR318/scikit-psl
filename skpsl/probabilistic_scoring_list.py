@@ -20,35 +20,29 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
         self.logger = logging.getLogger(__name__)
         self.scores_vec = np.array(scores)
-        self.score_sums = {}
         self.probabilities = {}
         self.entropy = None
-        self.calibrator = None
 
     def fit(self, X, y) -> "_ClassifierAtK":
-        n = X.shape[0]
-        relevant_scores = self._relevant_scores(X)
+        scores = self._scores_per_record(X)
+        n = scores.size
 
         # compute all possible total scores using subset-summation
-        self.score_sums = {0}
+        total_scores = {0}
         for score in self.scores_vec:
-            self.score_sums |= {prev_sum + score for prev_sum in self.score_sums}
+            total_scores |= {prev_sum + score for prev_sum in total_scores}
+        total_scores = np.array(sorted(total_scores))
 
-        # calibrate probabilities
-        self.calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
-        self.calibrator.fit(relevant_scores, y)
+        # compute probabilities
+        calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
+        calibrator.fit(scores, y)
+        self.probabilities = {T: p for T, p in zip(total_scores, calibrator.transform(total_scores))}
 
-        # compute calibrated probabilities
-        sigmaK = np.array(sorted(self.score_sums))
-        cal_ps = self.calibrator.predict(sigmaK)
-
-        # set calibrated probabilities
-        self.probabilities = {T: p for T, p in zip(sigmaK, cal_ps)}
-        self.entropy = 0
-        for ti, pi in self.probabilities.items():
-            Ni = np.count_nonzero(relevant_scores == ti)
-            Hi = stats_entropy([pi, 1 - pi], base=2)
-            self.entropy += (Ni / n) * Hi
+        # TODO. this should actually be inside of a score function. the actual fitting is finished at this point
+        total_scores, score_freqs = np.unique(scores, return_counts=True)
+        score_probas = np.array([self.probabilities[ti] for ti in total_scores])
+        entropy_values = stats_entropy([score_probas, 1 - score_probas], base=2)
+        self.entropy = np.sum((score_freqs / n) * entropy_values)
 
         return self
 
@@ -58,13 +52,16 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     def predict_proba(self, X):
         """Predicts the probability for
         """
-        proba_true = np.vectorize(self.probabilities.get)(self._relevant_scores(X))
+        scores = self._scores_per_record(X)
+        proba_true = np.empty_like(scores, dtype=float)
+        for total_score in np.unique(scores):
+            proba_true[scores == total_score] = self.probabilities[total_score]
         proba = np.vstack([1 - proba_true, proba_true]).T
         return proba
 
     # Helper functions
-    def _relevant_scores(self, X):
-        return np.sum(X[:, self.features] * self.scores_vec, axis=1)
+    def _scores_per_record(self, X):
+        return X[:, self.features] @ self.scores_vec
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
