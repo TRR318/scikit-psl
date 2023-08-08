@@ -1,5 +1,6 @@
 /.idea
 /dist
+.ipynb_checkpoints/
 
 poetry.lock
 /docs/_build/
