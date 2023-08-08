@@ -8,26 +8,28 @@ from sklearn.isotonic import IsotonicRegression
 
 
 class _ClassifierAtK(BaseEstimator, ClassifierMixin):
-    """Internal class for the classifier at stage k of the probabilistic scoring list
-    This allows for easy calibration using the SKLearn interface
+    """
+    Internal class for the classifier at stage k of the probabilistic scoring list
     """
 
-    def __init__(self, scores, features) -> None:
-        self.logger = logging.getLogger(__name__)
-        self.scores = np.array(scores)
+    def __init__(self, scores, features):
+        self.scores = scores
         self.features = features
+
+        self.logger = logging.getLogger(__name__)
+        self.scores_vec = np.array(scores)
         self.score_sums = {}
         self.probabilities = {}
         self.entropy = None
         self.calibrator = None
 
-    def fit(self, X, y):
+    def fit(self, X, y) -> "_ClassifierAtK":
         n = X.shape[0]
         relevant_scores = self._relevant_scores(X)
 
         # compute all possible total scores using subset-summation
         self.score_sums = {0}
-        for score in self.scores:
+        for score in self.scores_vec:
             self.score_sums |= {prev_sum + score for prev_sum in self.score_sums}
 
         # calibrate probabilities
@@ -60,84 +62,84 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
     # Helper functions
     def _relevant_scores(self, X):
-        return np.sum(X[:, self.features] * self.scores, axis=1)
+        return np.sum(X[:, self.features] * self.scores_vec, axis=1)
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
+    """
+    Probabilistic scoring list classifier. A probabilistic classifier that greedily creates a PSL selecting one feature at a time
+    """
+
     def __init__(self, score_set, entropy_threshold=-1):
         """ IMPORTANT: Shannon entropy is calculated with respect to base 2
         """
-        self.logger = logging.getLogger(__name__)
         self.score_set = score_set
-        self.sorted_score_set = sorted(self.score_set, reverse=True)
         self.entropy_threshold = entropy_threshold
+
+        self.logger = logging.getLogger(__name__)
+        self.sorted_score_set = sorted(self.score_set, reverse=True)
         self.X = None
         self.y = None
         self.scores = []
         self.features = []
         self.total_scores_at_k = []
         self.probabilities_at_k = []
-        self.classifier_at_k = []
+        self.stage_clfs = []
         self.entropy_at_k = []
-        self._ClassifierAtK = _ClassifierAtK
+        self._stage_clf = _ClassifierAtK
 
-    def fit(self, X, y, predefined_features=None, predefined_scores=None):
+    def fit(self, X, y, predef_features=None, predef_scores=None) -> "ProbabilisticScoringList":
         """Fits a probabilistic scoring list to the given data
         """
 
         number_features = X.shape[1]
-        remaining_feature_indices = list(range(number_features))
+        remaining_features = list(range(number_features))
 
-        if predefined_features is not None and len(predefined_features) != number_features:
+        if predef_features is not None and len(predef_features) != number_features:
             raise ValueError("Predefined features must be a permutation of all features!")
 
         self.X = X
         self.y = y
 
-        stage = 0
-
         self.features = []
         self.scores = []
 
-        # first 
-        temp_classifier_at_k = self._ClassifierAtK(features=[], scores=[])
-        temp_classifier_at_k.fit(X, y)
-        temp_expected_entropy = temp_classifier_at_k.entropy
-        self.classifier_at_k.append(temp_classifier_at_k)
-        expected_entropy = temp_expected_entropy
+        stage = 0
 
-        while remaining_feature_indices and expected_entropy > self.entropy_threshold:
+        # first 
+        curr_stage_clf = self._stage_clf(features=[], scores=[])
+        curr_stage_clf.fit(X, y)
+        self.stage_clfs.append(curr_stage_clf)
+        expected_entropy = curr_stage_clf.entropy
+
+        while remaining_features and expected_entropy > self.entropy_threshold:
             stage += 1
-            classifier_at_k = None
 
             # try all features and possible scores
-            fk, sk = remaining_feature_indices[0], self.sorted_score_set[-1]
+            curr_stage_clf = None
+            fk, sk = remaining_features[0], self.sorted_score_set[-1]
             current_expected_entropy = np.inf
 
-            if predefined_features is None:
-                features_to_consider = remaining_feature_indices
-            else:
-                features_to_consider = [predefined_features[stage - 1]]
-
-            scores_to_consider = self.sorted_score_set if predefined_scores is None else [predefined_scores[stage - 1]]
+            features_to_consider = remaining_features if predef_features is None else [predef_features[stage - 1]]
+            scores_to_consider = self.sorted_score_set if predef_scores is None else [predef_scores[stage - 1]]
 
             for f in features_to_consider:
                 cand_features = self.features + [f]
                 for s in scores_to_consider:
-                    temp_scores = np.array(self.scores + [s])
-                    temp_classifier_at_k = self._ClassifierAtK(features=cand_features, scores=temp_scores)
-                    temp_classifier_at_k.fit(X, y)
-                    temp_expected_entropy = temp_classifier_at_k.entropy
-                    # self.logger.info(f"feature {f} scores {s} entropy {temp_expected_entropy}")
+                    tmp_stage_clf = self._stage_clf(features=cand_features, scores=np.array(self.scores + [s]))
+                    tmp_stage_clf.fit(X, y)
+                    temp_expected_entropy = tmp_stage_clf.entropy
+
+                    self.logger.info(f"feature {f} scores {s} entropy {temp_expected_entropy}")
                     if temp_expected_entropy < current_expected_entropy:
                         current_expected_entropy = temp_expected_entropy
                         fk, sk = f, s
-                        classifier_at_k = temp_classifier_at_k
+                        curr_stage_clf = tmp_stage_clf
 
             expected_entropy = current_expected_entropy
-            self.classifier_at_k.append(classifier_at_k)
+            self.stage_clfs.append(curr_stage_clf)
 
-            remaining_feature_indices.remove(fk)
+            remaining_features.remove(fk)
 
             self.features.append(fk)
             self.scores.append(sk)
@@ -160,10 +162,10 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param k: Classifier stage to use for prediction
         :return:
         """
-        if not self.classifier_at_k:
+        if not self.stage_clfs:
             raise NotFittedError("Please fit the probabilistic scoring classifier before usage.")
 
-        return self.classifier_at_k[k].predict_proba(X)
+        return self.stage_clfs[k].predict_proba(X)
 
 
 if __name__ == '__main__':
@@ -176,4 +178,3 @@ if __name__ == '__main__':
 
     clf = ProbabilisticScoringList([-1, 1, 2])
     print(cross_val_score(clf, X, y, cv=5))
-
