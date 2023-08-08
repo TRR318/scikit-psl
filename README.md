@@ -1,4 +1,4 @@
-[![License](https://img.shields.io/github/license/stheid/psl)](https://github.com/stheid/sklearn-psl/blob/master/LICENSE)
+[![License](https://img.shields.io/github/license/stheid/sklearn-psl)](https://github.com/stheid/sklearn-psl/blob/master/LICENSE)
 [![Pip](https://img.shields.io/pypi/v/:sklearn-psl)](https://pypi.org/project/sklearn-psl)
 
 # Probabilistic Scoring Lists
