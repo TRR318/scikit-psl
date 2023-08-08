@@ -67,7 +67,8 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     """
-    Probabilistic scoring list classifier. A probabilistic classifier that greedily creates a PSL selecting one feature at a time
+    Probabilistic scoring list classifier.
+    A probabilistic classifier that greedily creates a PSL selecting one feature at a time
     """
 
     def __init__(self, score_set, entropy_threshold=-1):
