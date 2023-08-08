@@ -1,6 +1,8 @@
 import logging
+from itertools import combinations, product, repeat
 
 import numpy as np
+from joblib import Parallel, delayed
 from scipy.stats import entropy as stats_entropy
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
@@ -12,9 +14,9 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     Internal class for the classifier at stage k of the probabilistic scoring list
     """
 
-    def __init__(self, scores, features):
-        self.scores = scores
+    def __init__(self, features, scores):
         self.features = features
+        self.scores = scores
 
         self.logger = logging.getLogger(__name__)
         self.scores_vec = np.array(scores)
@@ -89,8 +91,17 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.entropy_at_k = []
         self._stage_clf = _ClassifierAtK
 
-    def fit(self, X, y, predef_features=None, predef_scores=None) -> "ProbabilisticScoringList":
-        """Fits a probabilistic scoring list to the given data
+    def fit(self, X, y, l=1, n_jobs=1, predef_features=None, predef_scores=None) -> "ProbabilisticScoringList":
+        """
+        Fits a probabilistic scoring list to the given data
+
+        :param X:
+        :param y:
+        :param l: steps of look ahead
+        :param n_jobs: passed to joblib for parallelization
+        :param predef_features:
+        :param predef_scores:
+        :return:
         """
 
         number_features = X.shape[1]
@@ -116,34 +127,25 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         while remaining_features and expected_entropy > self.entropy_threshold:
             stage += 1
 
-            # try all features and possible scores
-            curr_stage_clf = None
-            fk, sk = remaining_features[0], self.sorted_score_set[-1]
-            current_expected_entropy = np.inf
-
             features_to_consider = remaining_features if predef_features is None else [predef_features[stage - 1]]
             scores_to_consider = self.sorted_score_set if predef_scores is None else [predef_scores[stage - 1]]
 
-            for f in features_to_consider:
-                cand_features = self.features + [f]
-                for s in scores_to_consider:
-                    tmp_stage_clf = self._stage_clf(features=cand_features, scores=np.array(self.scores + [s]))
-                    tmp_stage_clf.fit(X, y)
-                    temp_expected_entropy = tmp_stage_clf.entropy
+            clfs, entropies, f, s = zip(*Parallel(n_jobs=n_jobs)(
+                delayed(self._optimize)(self.features, f_seq, self.scores, list(s_seq), self._stage_clf, X, y)
+                for (f_seq, s_seq) in product(
+                    self._gen_lookahead(features_to_consider, l),
+                    # cartesian power of scores
+                    product(*repeat(scores_to_consider, min(l, len(features_to_consider))))
+                )
+            ))
 
-                    self.logger.info(f"feature {f} scores {s} entropy {temp_expected_entropy}")
-                    if temp_expected_entropy < current_expected_entropy:
-                        current_expected_entropy = temp_expected_entropy
-                        fk, sk = f, s
-                        curr_stage_clf = tmp_stage_clf
+            i = np.argmin(entropies)
 
-            expected_entropy = current_expected_entropy
-            self.stage_clfs.append(curr_stage_clf)
-
-            remaining_features.remove(fk)
-
-            self.features.append(fk)
-            self.scores.append(sk)
+            expected_entropy = entropies[i]
+            self.stage_clfs.append(clfs[i])
+            remaining_features.remove(f[i])
+            self.features.append(f[i])
+            self.scores.append(s[i])
         return self
 
     def predict(self, X, k=-1):
@@ -168,13 +170,26 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         return self.stage_clfs[k].predict_proba(X)
 
+    @staticmethod
+    def _optimize(features, feature_extension, scores, score_extension, clfcls, X, y):
+        clf = clfcls(features=features + feature_extension, scores=scores + score_extension).fit(X, y)
+        return clf, clf.entropy, feature_extension[0], score_extension[0]
+
+    @staticmethod
+    def _gen_lookahead(list_, lookahead):
+        # generate sequences of shortening lookaheads (because combinations returns empty list if len(list) < l)
+        combination_seqs = ([list(tup) for tup in combinations(list_, _l)] for _l in range(lookahead, 0, -1))
+        # get first non-empty sequence
+        seqs = next((seq for seq in combination_seqs if seq))
+        return seqs
+
 
 if __name__ == '__main__':
     from sklearn.datasets import make_classification
     from sklearn.model_selection import cross_val_score
 
     # Generating synthetic data with continuous features and a binary target variable
-    X, y = make_classification(n_samples=100, n_features=10, n_informative=10, n_redundant=0, random_state=42)
+    X, y = make_classification(random_state=42)
     X = (X > .5).astype(int)
 
     clf = ProbabilisticScoringList([-1, 1, 2])
