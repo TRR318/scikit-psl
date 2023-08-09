@@ -1,5 +1,6 @@
 [![License](https://img.shields.io/github/license/stheid/scikit-psl)](https://github.com/stheid/scikit-psl/blob/master/LICENSE)
-[![Pip](https://img.shields.io/pypi/v/:scikit-psl)](https://pypi.org/project/scikit-psl)
+[![Pip](https://img.shields.io/pypi/v/scikit-psl)](https://pypi.org/project/scikit-psl)
+
 
 # Probabilistic Scoring Lists
 
