@@ -7,6 +7,7 @@ from scipy.stats import entropy as stats_entropy
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
+from sklearn.metrics import brier_score_loss
 
 
 class _ClassifierAtK(BaseEstimator, ClassifierMixin):
@@ -97,7 +98,6 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.total_scores_at_k = []
         self.probabilities_at_k = []
         self.stage_clfs = []
-        self.entropy_at_k = []
         self._stage_clf = _ClassifierAtK
 
     def fit(self, X, y, l=1, n_jobs=1, predef_features=None, predef_scores=None) -> "ProbabilisticScoringList":
@@ -178,6 +178,16 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             raise NotFittedError("Please fit the probabilistic scoring classifier before usage.")
 
         return self.stage_clfs[k].predict_proba(X)
+
+    def score(self, X, y, sample_weight=None):
+        """
+        Calculates the Brier score of the model
+        :param X:
+        :param y:
+        :param sample_weight:
+        :return:
+        """
+        return brier_score_loss(y, self.predict_proba(X)[:, 1])
 
     @staticmethod
     def _optimize(features, feature_extension, scores, score_extension, clfcls, X, y):
