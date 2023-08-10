@@ -21,10 +21,9 @@ from skpsl import ProbabilisticScoringList
 X, y = make_classification(random_state=42)
 X = (X > .5).astype(int)
 
-clf = ProbabilisticScoringList([-1, 1, 2])
+psl = ProbabilisticScoringList([-1, 1, 2])
 
 for train, test in ShuffleSplit(1, test_size=.2, random_state=42).split(X):
-    psl = ProbabilisticScoringList([-1, 1, 2])
     psl.fit(X[train], y[train])
     print(f"Brier score: {psl.score(X[test], y[test]):.4f}")
     #>  Brier score: 0.1924  (lower is better)

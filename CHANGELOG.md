@@ -8,8 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- PSL classifier: introduced parallelization
-- PSL classifier: implemented l-step lookahead
+- PSL classifier
+  - introduced parallelization
+  - implemented l-step lookahead
+  - simple inspect(·) method that creates a tabular representation of the model
+    
 
 ## 0.1.0 - 2023-08-08
 
