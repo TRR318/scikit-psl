@@ -23,38 +23,28 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
         self.logger = logging.getLogger(__name__)
         self.scores_vec = np.array(scores)
-        self.probabilities = None
+        self.calibrator = None
 
     def fit(self, X, y) -> "_ClassifierAtK":
         scores = self._scores_per_record(X)
 
-        # compute all possible total scores using subset-summation
-        total_scores = {0}
-        for score in self.scores_vec:
-            total_scores |= {prev_sum + score for prev_sum in total_scores}
-        total_scores = np.array(sorted(total_scores))
-
         # compute probabilities
-        calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
-        calibrator.fit(scores, y)
-        self.probabilities = {T: p for T, p in zip(total_scores, calibrator.transform(total_scores))}
+        self.calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
+        self.calibrator.fit(scores, y)
 
         return self
 
     def predict(self, X):
-        if self.probabilities is None:
+        if self.calibrator is None:
             raise NotFittedError()
         return self.predict_proba(X).argmax(axis=1)
 
     def predict_proba(self, X):
         """Predicts the probability for
         """
-        if self.probabilities is None:
+        if self.calibrator is None:
             raise NotFittedError()
-        scores = self._scores_per_record(X)
-        proba_true = np.empty_like(scores, dtype=float)
-        for total_score in np.unique(scores):
-            proba_true[scores == total_score] = self.probabilities[total_score]
+        proba_true = self.calibrator.transform(self._scores_per_record(X))
         proba = np.vstack([1 - proba_true, proba_true]).T
         return proba
 
@@ -66,11 +56,11 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         :param sample_weight:
         :return:
         """
-        if self.probabilities is None:
+        if self.calibrator is None:
             raise NotFittedError()
         scores = self._scores_per_record(X)
         total_scores, score_freqs = np.unique(scores, return_counts=True)
-        score_probas = np.array([self.probabilities[ti] for ti in total_scores])
+        score_probas = np.array(self.calibrator.transform(total_scores))
         entropy_values = stats_entropy([score_probas, 1 - score_probas], base=2)
         return np.sum((score_freqs / scores.size) * entropy_values)
 
@@ -184,9 +174,13 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         """
         k = k or len(self.stage_clfs) - 1
 
-        pmfs = [clf.probabilities for clf in self.stage_clfs[:k + 1]]
-        all_total_scores = sorted(set.union(*[set(pmf.keys()) for pmf in pmfs]))
-        data = [[pmfs[i].get(t_, np.nan) for t_ in all_total_scores] for i in range(k + 1)]
+        pdfs = [clf.calibrator for clf in self.stage_clfs[:k + 1]]
+        scores = np.array(self.stage_clfs[k].scores)
+        positive_sum = np.sum(scores[scores > 0])
+        negative_sum = np.sum(scores[scores < 0])
+
+        all_total_scores = np.linspace(negative_sum, positive_sum, 7)
+        data = [pdf.transform(all_total_scores) for pdf in pdfs]
 
         df = pd.DataFrame(columns=[f"T = {t_}" for t_ in all_total_scores], data=data)
         df.insert(0, "Score", [np.nan] + self.stage_clfs[k].scores)
