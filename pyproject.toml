@@ -4,10 +4,9 @@ version = "0.1.0"
 description = "Probabilistic Scoring List classifier"
 license = "MIT"
 authors = ["Stefan Heid <stefan.heid@upb.de>", "Jonas Hanselle <jonas.hanselle@ifi.lmu.de>"]
-readme = "README.md"
+readme = ["README.md", "CHANGELOG.md"]
 repository = "https://github.com/stheid/scikit-psl"
-packages = [
-    { include = "skpsl" },]
+packages = [{ include = "skpsl" }]
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.13"
