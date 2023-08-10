@@ -3,6 +3,7 @@ from itertools import combinations, product, repeat
 from typing import List
 
 import numpy as np
+import pandas as pd
 from joblib import Parallel, delayed
 from scipy.stats import entropy as stats_entropy
 from sklearn.base import BaseEstimator, ClassifierMixin
@@ -105,7 +106,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param n_jobs: passed to joblib for parallelization
         :param predef_features:
         :param predef_scores:
-        :return:
+        :return: The fitted classifier
         """
 
         number_features = X.shape[1]
@@ -162,15 +163,36 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         return self.stage_clfs[k].predict_proba(X)
 
-    def score(self, X, y, sample_weight=None):
+    def score(self, X, y, k=-1, sample_weight=None):
         """
         Calculates the Brier score of the model
         :param X:
         :param y:
-        :param sample_weight:
+        :param k: Classifier stage to use for prediction
+        :param sample_weight: ignored
         :return:
         """
-        return brier_score_loss(y, self.predict_proba(X)[:, 1])
+        return brier_score_loss(y, self.predict_proba(X, k=k)[:, 1])
+
+    def inspect(self, k=None, feature_names=None) -> pd.DataFrame:
+        """
+        Returns a dataframe that visualizes the internal model
+
+        :param k: maximum stage to include in the visualization (default: all stages)
+        :param feature_names: names of the features.
+        :return:
+        """
+        k = k or len(self.stage_clfs) - 1
+
+        pmfs = [clf.probabilities for clf in self.stage_clfs[:k + 1]]
+        all_total_scores = sorted(set.union(*[set(pmf.keys()) for pmf in pmfs]))
+        data = [[pmfs[i].get(t_, np.nan) for t_ in all_total_scores] for i in range(k + 1)]
+
+        df = pd.DataFrame(columns=[f"T = {t_}" for t_ in all_total_scores], data=data)
+        df.insert(0, "Score", [np.nan] + self.stage_clfs[k].scores)
+        if feature_names is not None:
+            df.insert(0, "Feature", [np.nan] + feature_names[:k] + [np.nan] * (k - len(feature_names)))
+        return df.reset_index(names=["Stage"])
 
     @property
     def features(self):
