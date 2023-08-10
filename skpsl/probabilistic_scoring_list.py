@@ -1,5 +1,6 @@
 import logging
 from itertools import combinations, product, repeat
+from typing import List
 
 import numpy as np
 from joblib import Parallel, delayed
@@ -91,14 +92,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         self.logger = logging.getLogger(__name__)
         self.sorted_score_set = sorted(self.score_set, reverse=True)
-        self.X = None
-        self.y = None
-        self.scores = []
-        self.features = []
-        self.total_scores_at_k = []
-        self.probabilities_at_k = []
-        self.stage_clfs = []
         self._stage_clf = _ClassifierAtK
+        self.stage_clfs = []  # type: List[_ClassifierAtK]
 
     def fit(self, X, y, l=1, n_jobs=1, predef_features=None, predef_scores=None) -> "ProbabilisticScoringList":
         """
@@ -119,19 +114,10 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         if predef_features is not None and len(predef_features) != number_features:
             raise ValueError("Predefined features must be a permutation of all features!")
 
-        self.X = X
-        self.y = y
-
-        self.features = []
-        self.scores = []
-
         stage = 0
 
         # first 
-        curr_stage_clf = self._stage_clf(features=[], scores=[])
-        curr_stage_clf.fit(X, y)
-        self.stage_clfs.append(curr_stage_clf)
-        expected_entropy = curr_stage_clf.score(X)
+        expected_entropy = self._fit_and_store_clf_at_k(X, y)
 
         while remaining_features and expected_entropy > self.entropy_threshold:
             stage += 1
@@ -139,7 +125,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             features_to_consider = remaining_features if predef_features is None else [predef_features[stage - 1]]
             scores_to_consider = self.sorted_score_set if predef_scores is None else [predef_scores[stage - 1]]
 
-            clfs, entropies, f, s = zip(*Parallel(n_jobs=n_jobs)(
+            entropies, f, s = zip(*Parallel(n_jobs=n_jobs)(
                 delayed(self._optimize)(self.features, f_seq, self.scores, list(s_seq), self._stage_clf, X, y)
                 for (f_seq, s_seq) in product(
                     self._gen_lookahead(features_to_consider, l),
@@ -149,12 +135,9 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             ))
 
             i = np.argmin(entropies)
-
-            expected_entropy = entropies[i]
-            self.stage_clfs.append(clfs[i])
             remaining_features.remove(f[i])
-            self.features.append(f[i])
-            self.scores.append(s[i])
+
+            expected_entropy = self._fit_and_store_clf_at_k(X, y, self.features + [f[i]], self.scores + [s[i]])
         return self
 
     def predict(self, X, k=-1):
@@ -189,10 +172,24 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         """
         return brier_score_loss(y, self.predict_proba(X)[:, 1])
 
+    @property
+    def features(self):
+        return self.stage_clfs[-1].features if self.stage_clfs else []
+
+    @property
+    def scores(self):
+        return self.stage_clfs[-1].scores if self.stage_clfs else []
+
+    def _fit_and_store_clf_at_k(self, X, y, f=None, s=None):
+        f, s = f or [], s or []
+        k_clf = self._stage_clf(features=f, scores=s).fit(X, y)
+        self.stage_clfs.append(k_clf)
+        return k_clf.score(X)
+
     @staticmethod
     def _optimize(features, feature_extension, scores, score_extension, clfcls, X, y):
         clf = clfcls(features=features + feature_extension, scores=scores + score_extension).fit(X, y)
-        return clf, clf.score(X), feature_extension[0], score_extension[0]
+        return clf.score(X), feature_extension[0], score_extension[0]
 
     @staticmethod
     def _gen_lookahead(list_, lookahead):
@@ -212,4 +209,4 @@ if __name__ == '__main__':
     X = (X > .5).astype(int)
 
     clf = ProbabilisticScoringList([-1, 1, 2])
-    print(cross_val_score(clf, X, y, cv=5))
+    print("Brier score:", cross_val_score(clf, X, y, cv=5).mean())
