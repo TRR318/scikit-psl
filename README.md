@@ -4,6 +4,15 @@
 
 # Probabilistic Scoring Lists
 
+Probabilistic scoring lists are incremental models that evaluate one feature of the dataset at a time.
+PSLs can be seen as a extension to *scoring systems* in two ways:
+- they can be evaluated at any stage allowing to trade of model complexity and prediction speed.
+- they provide a probability distribution over scores instead of hard thresholds.
+
+Scoring Systems are used as decision support for human experts in medical or law domains.
+
+The implementation adheres to the [sklearn-api](https://scikit-learn.org/stable/glossary.html#glossary-estimator-types).
+
 # Install
 ```bash
 pip install scikit-psl
