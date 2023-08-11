@@ -20,14 +20,13 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     def __init__(self, features, scores):
         self.features = features
         self.scores = scores
-        
+
         self.logger = logging.getLogger(__name__)
         self.scores_vec = np.array(scores)
         self.calibrator = None
         self.bins = None
 
     def fit(self, X, y) -> "_ClassifierAtK":
-
         scores = self._scores_per_record(X)
 
         # compute all possible total scores using subset-summation
@@ -37,7 +36,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         total_scores = np.array(sorted(total_scores))
 
         # compute bins
-        self.bins = (total_scores[:-1] + total_scores[1:]) / 2 
+        self.bins = (total_scores[:-1] + total_scores[1:]) / 2
 
         # compute probabilities
         self.calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
