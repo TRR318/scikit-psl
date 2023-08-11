@@ -17,30 +17,24 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     Internal class for the classifier at stage k of the probabilistic scoring list
     """
 
-    def __init__(self, features, scores):
+    def __init__(self, features, scores, thresholds=None):
         self.features = features
         self.scores = scores
+        self.thresholds = thresholds
 
         self.logger = logging.getLogger(__name__)
         self.scores_vec = np.array(scores)
         self.calibrator = None
-        self.bins = None
 
     def fit(self, X, y) -> "_ClassifierAtK":
-        scores = self._scores_per_record(X)
-
-        # compute all possible total scores using subset-summation
-        total_scores = {0}
-        for score in self.scores_vec:
-            total_scores |= {prev_sum + score for prev_sum in total_scores}
-        total_scores = np.array(sorted(total_scores))
-
-        # compute bins
-        self.bins = (total_scores[:-1] + total_scores[1:]) / 2
+        scores = self._scores_per_binarized_record(X)
 
         # compute probabilities
         self.calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
         self.calibrator.fit(scores, y)
+
+        # TODO fit thresholds
+
 
         return self
 
@@ -54,7 +48,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         """
         if self.calibrator is None:
             raise NotFittedError()
-        proba_true = self.calibrator.transform(np.digitize(self._scores_per_record(X), self.bins))
+        proba_true = self.calibrator.transform(self._scores_per_binarized_record(X))
         proba = np.vstack([1 - proba_true, proba_true]).T
         return proba
 
@@ -68,15 +62,20 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         """
         if self.calibrator is None:
             raise NotFittedError()
-        scores = np.digitize(self._scores_per_record(X), self.bins)
+        scores = self._scores_per_binarized_record(X)
         total_scores, score_freqs = np.unique(scores, return_counts=True)
         score_probas = np.array(self.calibrator.transform(total_scores))
         entropy_values = stats_entropy([score_probas, 1 - score_probas], base=2)
         return np.sum((score_freqs / scores.size) * entropy_values)
 
     # Helper functions
-    def _scores_per_record(self, X):
-        return X[:, self.features] @ self.scores_vec
+    def _scores_per_binarized_record(self, X):
+        return self._binarize(X)[:, self.features] @ self.scores_vec
+
+    def _binarize(self, X) -> np.array:
+        # TODO use self.thresholds
+        pass
+
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
@@ -123,6 +122,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         while remaining_features and expected_entropy > self.entropy_threshold:
             stage += 1
 
+            # noinspection PyUnresolvedReferences
             features_to_consider = remaining_features if predef_features is None else [predef_features[stage - 1]]
             scores_to_consider = self.sorted_score_set if predef_scores is None else [predef_scores[stage - 1]]
 
@@ -232,7 +232,7 @@ if __name__ == '__main__':
 
     # Generating synthetic data with continuous features and a binary target variable
     X, y = make_classification(random_state=42)
-    #X = (X > .5).astype(int)
+    # X = (X > .5).astype(int)
 
     clf = ProbabilisticScoringList([-1, 1, 2])
     print("Brier score:", cross_val_score(clf, X, y, cv=5).mean())
