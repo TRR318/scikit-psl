@@ -20,13 +20,24 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     def __init__(self, features, scores):
         self.features = features
         self.scores = scores
-
+        
         self.logger = logging.getLogger(__name__)
         self.scores_vec = np.array(scores)
         self.calibrator = None
+        self.bins = None
 
     def fit(self, X, y) -> "_ClassifierAtK":
+
         scores = self._scores_per_record(X)
+
+        # compute all possible total scores using subset-summation
+        total_scores = {0}
+        for score in self.scores_vec:
+            total_scores |= {prev_sum + score for prev_sum in total_scores}
+        total_scores = np.array(sorted(total_scores))
+
+        # compute bins
+        self.bins = (total_scores[:-1] + total_scores[1:]) / 2 
 
         # compute probabilities
         self.calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
@@ -44,7 +55,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         """
         if self.calibrator is None:
             raise NotFittedError()
-        proba_true = self.calibrator.transform(self._scores_per_record(X))
+        proba_true = self.calibrator.transform(np.digitize(self._scores_per_record(X), self.bins))
         proba = np.vstack([1 - proba_true, proba_true]).T
         return proba
 
@@ -58,7 +69,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         """
         if self.calibrator is None:
             raise NotFittedError()
-        scores = self._scores_per_record(X)
+        scores = np.digitize(self._scores_per_record(X), self.bins)
         total_scores, score_freqs = np.unique(scores, return_counts=True)
         score_probas = np.array(self.calibrator.transform(total_scores))
         entropy_values = stats_entropy([score_probas, 1 - score_probas], base=2)
@@ -222,7 +233,7 @@ if __name__ == '__main__':
 
     # Generating synthetic data with continuous features and a binary target variable
     X, y = make_classification(random_state=42)
-    X = (X > .5).astype(int)
+    #X = (X > .5).astype(int)
 
     clf = ProbabilisticScoringList([-1, 1, 2])
     print("Brier score:", cross_val_score(clf, X, y, cv=5).mean())
