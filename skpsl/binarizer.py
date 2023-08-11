@@ -3,6 +3,7 @@ from functools import partial
 from typing import Tuple
 
 import numpy as np
+import pandas as pd
 from scipy.optimize import minimize
 from scipy.stats import entropy
 from sklearn.base import TransformerMixin, BaseEstimator
@@ -25,6 +26,17 @@ class MinEntropyBinarizer(BaseEstimator, TransformerMixin, auto_wrap_output_keys
             raise NotFittedError()
         return np.apply_along_axis(lambda x: MinEntropyBinarizer._binarize(x[1:], thresh=x[0])[1], 0,
                                    np.vstack([self.threshs.reshape(1, -1), X]))
+
+    def inspect(self, feature_names=None) -> pd.DataFrame:
+        """
+        Returns a dataframe that visualizes the internal model
+        """
+        k = len(self.threshs) 
+        df = pd.DataFrame(columns=["Threshold"], data=self.threshs)
+        if feature_names is not None:
+            df.insert(0, "Feature", feature_names[:k] + [np.nan] * (k - len(feature_names)))
+        return df
+
 
     @staticmethod
     def _cut_entropy(x: np.ndarray, y: np.ndarray, thresh: float) -> float:
@@ -91,3 +103,14 @@ if __name__ == '__main__':
     X = x1.reshape(-1, 1)
     print(np.hstack([X, y.reshape(-1, 1)]))
     print(MinEntropyBinarizer().fit(X, y).transform(X))
+
+    x1 = np.linspace(0, 100, 10)
+    y = (x1 > 30).astype(int)
+    X = x1.reshape(-1, 1)
+    print(np.hstack([X, y.reshape(-1, 1)]))
+    print(MinEntropyBinarizer().fit(X, y).inspect())
+
+    X, y = make_classification(n_samples=50, n_features=3, n_informative=2, n_redundant=0, random_state=42)
+    # X = x1.reshape(-1, 1)
+    print(np.hstack([X, y.reshape(-1, 1)]))
+    print(MinEntropyBinarizer().fit(X, y).inspect(feature_names=["width", "height"]))
