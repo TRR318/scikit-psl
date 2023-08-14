@@ -111,6 +111,5 @@ if __name__ == '__main__':
     print(MinEntropyBinarizer().fit(X, y).inspect())
 
     X, y = make_classification(n_samples=50, n_features=3, n_informative=2, n_redundant=0, random_state=42)
-    # X = x1.reshape(-1, 1)
     print(np.hstack([X, y.reshape(-1, 1)]))
     print(MinEntropyBinarizer().fit(X, y).inspect(feature_names=["width", "height"]))
