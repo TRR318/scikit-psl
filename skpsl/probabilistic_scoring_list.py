@@ -219,8 +219,12 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
     @staticmethod
     def _optimize(features, feature_extension, scores, score_extension, thresholds, clfcls, X, y):
-        # TODO how to make this properly parallelized? 
+        # TODO how to make this properly parallelized?         
+        # TODO find best split: How does this work with lookahead? We need to discuss
         thresholds = thresholds + [1]
+        candidate_thresholds = np.unique()
+
+
         clf = clfcls(features=features + feature_extension, scores=scores + score_extension, thresholds=thresholds ).fit(X, y)
         return clf.score(X), feature_extension[0], score_extension[0], thresholds[-1]
 
@@ -238,7 +242,8 @@ if __name__ == '__main__':
 
     # Generating synthetic data with continuous features and a binary target variable
     X, y = make_classification(random_state=42)
-    # X = (X > .5).astype(int)
+    
+    X = (X > 0.5).astype(int)
 
     clf = ProbabilisticScoringList([-1, 1, 2])
     print("Brier score:", cross_val_score(clf, X, y, cv=5).mean())
