@@ -27,14 +27,13 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         self.calibrator = None
 
     def fit(self, X, y) -> "_ClassifierAtK":
+
+        # TODO we need to fit the remaining splitting thresholds, i.e. when doing l-step lookahead, l thresholds need to be fitted.
         scores = self._scores_per_binarized_record(X)
 
         # compute probabilities
         self.calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
         self.calibrator.fit(scores, y)
-
-        # TODO fit thresholds
-        
 
         return self
 
@@ -52,6 +51,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         proba = np.vstack([1 - proba_true, proba_true]).T
         return proba
 
+    # TODO this function needs to be outsourced into an internal loss function that can be called in the fit function
     def score(self, X, y=None, sample_weight=None):
         """
         Calculates the expected entropy of the fitted model
@@ -219,12 +219,6 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
     @staticmethod
     def _optimize(features, feature_extension, scores, score_extension, thresholds, clfcls, X, y):
-        # TODO how to make this properly parallelized?         
-        # TODO find best split: How does this work with lookahead? We need to discuss
-        thresholds = thresholds + [1]
-        candidate_thresholds = np.unique()
-
-
         clf = clfcls(features=features + feature_extension, scores=scores + score_extension, thresholds=thresholds ).fit(X, y)
         return clf.score(X), feature_extension[0], score_extension[0], thresholds[-1]
 
