@@ -1,14 +1,13 @@
 import logging
-from functools import partial
 from typing import Tuple
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
 from scipy.stats import entropy
 from sklearn.base import TransformerMixin, BaseEstimator
 from sklearn.exceptions import NotFittedError
 from sklearn.preprocessing import MinMaxScaler
+from sortedcontainers import SortedSet
 
 logger = logging.getLogger()
 
@@ -31,12 +30,11 @@ class MinEntropyBinarizer(BaseEstimator, TransformerMixin, auto_wrap_output_keys
         """
         Returns a dataframe that visualizes the internal model
         """
-        k = len(self.threshs) 
+        k = len(self.threshs)
         df = pd.DataFrame(columns=["Threshold"], data=self.threshs)
         if feature_names is not None:
             df.insert(0, "Feature", feature_names[:k] + [np.nan] * (k - len(feature_names)))
         return df
-
 
     @staticmethod
     def _cut_entropy(x: np.ndarray, y: np.ndarray, thresh: float) -> float:
@@ -67,12 +65,41 @@ class MinEntropyBinarizer(BaseEstimator, TransformerMixin, auto_wrap_output_keys
         if uniq.size < 3:
             thresh = np.min(uniq) + (np.max(uniq) - np.min(uniq)) / 2
         if thresh is None:
-            scaler = MinMaxScaler()
-            x_ = scaler.fit_transform(x.reshape(-1, 1)).squeeze()  # type:np.ndarray
-            thresh = minimize(partial(MinEntropyBinarizer._cut_entropy, x_, y), x.mean(), method="Nelder-Mead",
-                              options=dict(initial_simplex=[[0], [1]])).x.squeeze().item()
-            thresh = scaler.inverse_transform([[thresh]]).squeeze()
-            logger.debug(thresh)
+            x = MinMaxScaler().fit_transform(x.reshape(-1, 1)).squeeze()
+            values = np.sort(np.unique(x))
+            # maybe -inf and +inf are not neccesary, but better safe (authors where not able to proof optimality otherwise)
+            # if you have a proof, than please send a PR with the proof
+            cuts = np.concatenate([[-np.inf], (values[:-1] + values[1:]) / 2, [np.inf]])
+            minimal_points = set()
+            min_ = np.inf
+            thresh = None
+            evaluated = SortedSet()
+            to_evaluate = {0, cuts.size - 1}
+
+            while to_evaluate:
+                # evaluate points
+                while to_evaluate:
+                    k = to_evaluate.pop()
+                    evaluated.add(k)
+                    entropy = MinEntropyBinarizer._cut_entropy(x, y, cuts[k])
+                    if entropy < min_:
+                        min_ = entropy
+                        thresh = cuts[k]
+                        minimal_points = {k}
+                    elif entropy == min_:
+                        minimal_points.add(k)
+
+                # calculate new points to evaluate
+                for k in minimal_points:
+                    k_pos = evaluated.index(k)
+                    candidates = set()
+                    for offset in [-1, 1]:
+                        try:
+                            candidates.add(k + (evaluated[k_pos + offset] - k) // 2)
+                        except IndexError:
+                            pass
+                    to_evaluate.update(candidates - evaluated)
+
         return thresh, (x >= thresh).astype(int)
 
 
@@ -82,7 +109,7 @@ if __name__ == '__main__':
     logging.basicConfig()
     logger.setLevel(logging.DEBUG)
     # Generating synthetic data with continuous features and a binary target variable
-    X, y = make_classification(n_samples=5, n_features=2, n_informative=2, n_redundant=0, random_state=42)
+    X, y = make_classification(n_samples=5000, n_features=2, n_informative=2, n_redundant=0, random_state=42)
 
     print(np.hstack([X, y.reshape(-1, 1)]))
     print(MinEntropyBinarizer().fit_transform(X, y))
