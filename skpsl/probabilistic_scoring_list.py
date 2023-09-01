@@ -1,6 +1,6 @@
 import logging
 from itertools import combinations, product, repeat
-from typing import List
+from typing import List, Union
 
 import numpy as np
 import pandas as pd
@@ -17,7 +17,13 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     Internal class for the classifier at stage k of the probabilistic scoring list
     """
 
-    def __init__(self, features, scores, thresholds):
+    def __init__(self, features: tuple[int], scores: tuple[int], thresholds: tuple[Union[float, None]]):
+        """
+
+        :param features: tuple of feature indices. used for selecting data from X
+        :param scores: tuple of scores, corresponding to the feature indices
+        :param thresholds: tuple of thresholds to binarize the feature values
+        """
         self.features = features
         self.scores = scores
         self.thresholds = thresholds
@@ -27,8 +33,14 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         self.calibrator = None
 
     def fit(self, X, y) -> "_ClassifierAtK":
-
         # TODO we need to fit the remaining splitting thresholds, i.e. when doing l-step lookahead, l thresholds need to be fitted.
+        for f, s, t in zip(self.features, self.scores, self.thresholds):
+            is_data_binary = np.unique(X[f]) == [0, 1]
+            self.logger.debug(f"feature {f} is non-binary, calculating threshold")
+            if is_data_binary and t is None:
+                # fit optimal threshold
+                X[f]
+
         scores = self._scores_per_binarized_record(X)
 
         # compute probabilities
@@ -43,7 +55,8 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         return self.predict_proba(X).argmax(axis=1)
 
     def predict_proba(self, X):
-        """Predicts the probability for
+        """
+        Predicts the probability for
         """
         if self.calibrator is None:
             raise NotFittedError()
@@ -51,7 +64,6 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         proba = np.vstack([1 - proba_true, proba_true]).T
         return proba
 
-    # TODO this function needs to be outsourced into an internal loss function that can be called in the fit function
     def score(self, X, y=None, sample_weight=None):
         """
         Calculates the expected entropy of the fitted model
@@ -60,6 +72,9 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         :param sample_weight:
         :return:
         """
+        return self._expected_entropy(X)
+
+    def _expected_entropy(self, X):
         if self.calibrator is None:
             raise NotFittedError()
         scores = self._scores_per_binarized_record(X)
@@ -71,11 +86,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     # Helper functions
     def _scores_per_binarized_record(self, X):
         temp_X = X[:, self.features]
-        return self._binarize(temp_X) @ self.scores_vec
-
-    def _binarize(self, X) -> np.array:
-        ts = np.array(self.thresholds)
-        return X >= ts[None, :].astype("int")
+        return (np.array(temp_X) >= np.array(self.thresholds)[None, :]).astype("int") @ self.scores_vec
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
@@ -84,8 +95,11 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     A probabilistic classifier that greedily creates a PSL selecting one feature at a time
     """
 
-    def __init__(self, score_set, entropy_threshold=-1):
-        """ IMPORTANT: Shannon entropy is calculated with respect to base 2
+    def __init__(self, score_set: set, entropy_threshold: float = -1):
+        """
+
+        :param score_set: Set score values to be considered. Basically feature weights.
+        :param entropy_threshold: Shannon Entropy base 2 threshold after which to stop fitting more stages.
         """
         self.score_set = score_set
         self.entropy_threshold = entropy_threshold
@@ -139,7 +153,9 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             i = np.argmin(entropies)
             remaining_features.remove(f[i])
 
-            expected_entropy = self._fit_and_store_clf_at_k(X, y, self.features + [f[i]], self.scores + [s[i]],
+            expected_entropy = self._fit_and_store_clf_at_k(X, y,
+                                                            self.features + [f[i]],
+                                                            self.scores + [s[i]],
                                                             self.thresholds + [t[i]])
         return self
 
@@ -195,7 +211,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         data = [pdf.transform(all_total_scores) for pdf in pdfs]
 
         df = pd.DataFrame(columns=[f"T = {t_}" for t_ in all_total_scores], data=data)
-        df.insert(0, "Score", [np.nan] + self.stage_clfs[k].scores)
+        df.insert(0, "Score", np.array([np.nan] + list(self.stage_clfs[k].scores)))
         if feature_names is not None:
             df.insert(0, "Feature", [np.nan] + feature_names[:k] + [np.nan] * (k - len(feature_names)))
         return df.reset_index(names=["Stage"])
@@ -220,7 +236,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
     @staticmethod
     def _optimize(features, feature_extension, scores, score_extension, thresholds, clfcls, X, y):
-        clf = clfcls(features=features + feature_extension, scores=scores + score_extension, thresholds=thresholds).fit(
+        clf = clfcls(features=features + feature_extension, scores=scores + score_extension,
+                     thresholds=thresholds + [None] * len(feature_extension)).fit(
             X, y)
         return clf.score(X), feature_extension[0], score_extension[0], thresholds[-1]
 
@@ -241,5 +258,5 @@ if __name__ == '__main__':
     X, y = make_classification(random_state=42)
     X = (X > 0.5).astype(int)
 
-    clf = ProbabilisticScoringList([-1, 1, 2])
+    clf = ProbabilisticScoringList({-1, 1, 2})
     print("Brier score:", cross_val_score(clf, X, y, cv=5).mean())
