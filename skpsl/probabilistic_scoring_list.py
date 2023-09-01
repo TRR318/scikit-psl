@@ -11,7 +11,7 @@ from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss
 
-from skpsl.data.util import logarithmic_optimizer
+from skpsl.data.util import binary_search_optimizer
 
 
 class _ClassifierAtK(BaseEstimator, ClassifierMixin):
@@ -42,7 +42,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
             self.logger.debug(f"feature {f} is non-binary, calculating threshold")
             if t is np.nan and not is_data_binary:
                 # fit optimal threshold
-                self.thresholds[i] = logarithmic_optimizer(
+                self.thresholds[i] = binary_search_optimizer(
                     lambda t_, _: self._expected_entropy(
                         X=X, y=y,
                         features=self.features[:i + 1],

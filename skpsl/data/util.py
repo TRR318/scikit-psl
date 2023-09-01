@@ -2,7 +2,7 @@ import numpy as np
 from sortedcontainers import SortedSet
 
 
-def logarithmic_optimizer(func: callable, data: np.array, minimize=True) -> float:
+def binary_search_optimizer(func: callable, data: np.array, minimize=True) -> float:
     """
     This algorithm employs a hierarchical logarithmic search to find the global minimum of a parametrized metric.
 
