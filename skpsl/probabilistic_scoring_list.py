@@ -112,7 +112,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     def _scores_per_binarized_record(X, features, scores: np.ndarray, thresholds):
         data = np.array(X)[:, features]
         thresholds = np.array(thresholds)[None, :]
-        return (data >= thresholds) @ scores
+        return (data > thresholds) @ scores
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
@@ -135,13 +135,13 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self._stage_clf = _ClassifierAtK
         self.stage_clfs = []  # type: List[_ClassifierAtK]
 
-    def fit(self, X, y, l=1, n_jobs=1, predef_features=None, predef_scores=None) -> "ProbabilisticScoringList":
+    def fit(self, X, y, lookahead=1, n_jobs=1, predef_features=None, predef_scores=None) -> "ProbabilisticScoringList":
         """ 
         Fits a probabilistic scoring list to the given data
 
         :param X:
         :param y:
-        :param l: steps of look ahead
+        :param lookahead: steps of look ahead
         :param n_jobs: passed to joblib for parallelization
         :param predef_features:
         :param predef_scores:
@@ -170,9 +170,9 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 delayed(self._optimize)(self.features, f_seq, self.scores, list(s_seq), self.thresholds,
                                         self._stage_clf, X, y)
                 for (f_seq, s_seq) in product(
-                    self._gen_lookahead(features_to_consider, l),
+                    self._gen_lookahead(features_to_consider, lookahead),
                     # cartesian power of scores
-                    product(*repeat(scores_to_consider, min(l, len(features_to_consider))))
+                    product(*repeat(scores_to_consider, min(lookahead, len(features_to_consider))))
                 )
             ))
 
@@ -240,6 +240,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         df.insert(0, "Score", np.array([np.nan] + list(self.stage_clfs[k].scores)))
         if feature_names is not None:
             df.insert(0, "Feature", [np.nan] + feature_names[:k] + [np.nan] * (k - len(feature_names)))
+        if all(t is not None for t in self.stage_clfs[k].thresholds):
+            df.insert(0, "Threshold", np.array([np.nan] + [f">{t:.4f}" for t in self.stage_clfs[k].thresholds]))
         return df.reset_index(names=["Stage"])
 
     @property
@@ -281,8 +283,7 @@ if __name__ == '__main__':
     from sklearn.model_selection import cross_val_score
 
     # Generating synthetic data with continuous features and a binary target variable
-    X, y = make_classification(random_state=42)
-    X = (X > 0.5).astype(int)
+    X_, y_ = make_classification(random_state=42)
 
-    clf = ProbabilisticScoringList({-1, 1, 2})
-    print("Brier score:", cross_val_score(clf, X, y, cv=5).mean())
+    clf_ = ProbabilisticScoringList({-1, 1, 2})
+    print("Brier score:", cross_val_score(clf_, X_, y_, cv=5).mean())

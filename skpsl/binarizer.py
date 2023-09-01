@@ -36,7 +36,7 @@ class MinEntropyBinarizer(BaseEstimator, TransformerMixin, auto_wrap_output_keys
         Returns a dataframe that visualizes the internal model
         """
         k = len(self.threshs)
-        df = pd.DataFrame(columns=["Threshold"], data=self.threshs)
+        df = pd.DataFrame(columns=["Threshold"], data=[f">{t:.4f}" for t in self.threshs])
         if feature_names is not None:
             df.insert(0, "Feature", feature_names[:k] + [np.nan] * (k - len(feature_names)))
         return df
@@ -51,7 +51,7 @@ class MinEntropyBinarizer(BaseEstimator, TransformerMixin, auto_wrap_output_keys
         :param thresh: scalar
         :return: combined entropy as float
         """
-        mask = x < np.array(thresh).squeeze()
+        mask = x > np.array(thresh).squeeze()
         s1, s2 = y[mask], y[~mask]
         _, s1_freqs = np.unique(s1, return_counts=True)
         _, s2_freqs = np.unique(s2, return_counts=True)
