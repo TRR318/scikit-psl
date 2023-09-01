@@ -48,8 +48,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
                         partial(self._expected_entropy, thresholds_prefix=self.thresholds[:i],
                                 X=X,
                                 features=self.features[:i + 1], scores=self.scores_vec[:i + 1], y=y),
-                        feature_values,
-                        minimize=False)
+                        feature_values)
                 else:
                     # TODO this can be more efficient. There needs to be no actuall thresholding for truely binary data.
                     self.thresholds[i] = .5
@@ -230,18 +229,26 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         pdfs = [clf.calibrator for clf in self.stage_clfs[:k + 1]]
         scores = np.array(self.stage_clfs[k].scores)
-        positive_sum = np.sum(scores[scores > 0])
-        negative_sum = np.sum(scores[scores < 0])
 
-        all_total_scores = np.linspace(negative_sum, positive_sum, 7)
-        data = [pdf.transform(all_total_scores) for pdf in pdfs]
+        all_total_scores = [[0]]
+        total_scores = {0}
+        for score in scores:
+            total_scores |= {prev_sum + score for prev_sum in total_scores}
+            all_total_scores.append(np.array(sorted(total_scores)))
 
-        df = pd.DataFrame(columns=[f"T = {t_}" for t_ in all_total_scores], data=data)
+        data = []
+        for pdf, T in zip(pdfs, all_total_scores):
+            a = {t: np.nan for t in all_total_scores[-1]}
+            a.update({t: v for t, v in zip(T, pdf.transform(T))})
+            data.append(a)
+
+        df = pd.DataFrame(data)
+        df.columns = [f"T = {t_}" for t_ in df.columns]
         df.insert(0, "Score", np.array([np.nan] + list(self.stage_clfs[k].scores)))
         if feature_names is not None:
             df.insert(0, "Feature", [np.nan] + feature_names[:k] + [np.nan] * (k - len(feature_names)))
         if all(t is not None for t in self.stage_clfs[k].thresholds):
-            df.insert(0, "Threshold", np.array([np.nan] + [f">{t:.4f}" for t in self.stage_clfs[k].thresholds]))
+            df.insert(0, "Threshold", [np.nan] + [f">{t:.4f}" for t in self.stage_clfs[k].thresholds])
         return df.reset_index(names=["Stage"])
 
     @property

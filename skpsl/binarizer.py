@@ -18,9 +18,9 @@ class MinEntropyBinarizer(BaseEstimator, TransformerMixin, auto_wrap_output_keys
 
     def fit(self, X, y=None):
         def binarize(x):
-            uniq = np.unique(x)
-            if uniq.size < 3:
-                return np.min(uniq) + (np.max(uniq) - np.min(uniq)) / 2
+            is_data_binary = set(np.unique(x).astype(int)) == {0, 1}
+            if is_data_binary:
+                return np.nan
             return logarithmic_optimizer(partial(MinEntropyBinarizer._cut_entropy, y=y), x)
 
         self.threshs = np.apply_along_axis(binarize, 0, X)
@@ -29,7 +29,9 @@ class MinEntropyBinarizer(BaseEstimator, TransformerMixin, auto_wrap_output_keys
     def transform(self, X):
         if self.threshs is None:
             raise NotFittedError()
-        return (np.array(X) >= self.threshs).astype(int)
+        threshs = self.threshs
+        threshs[np.isnan(threshs)] = .5
+        return (np.array(X) > threshs).astype(int)
 
     def inspect(self, feature_names=None) -> pd.DataFrame:
         """
