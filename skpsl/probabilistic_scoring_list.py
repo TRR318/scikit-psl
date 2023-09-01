@@ -1,4 +1,5 @@
 import logging
+from functools import partial
 from itertools import combinations, product, repeat
 from typing import List, Union
 
@@ -11,37 +12,49 @@ from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss
 
+from skpsl.data.util import logarithmic_optimizer
+
 
 class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     """
     Internal class for the classifier at stage k of the probabilistic scoring list
     """
 
-    def __init__(self, features: tuple[int], scores: tuple[int], thresholds: tuple[Union[float, None]]):
+    def __init__(self, features: tuple[int], scores: tuple[int], initial_thresholds: tuple[Union[float, None]]):
         """
 
         :param features: tuple of feature indices. used for selecting data from X
         :param scores: tuple of scores, corresponding to the feature indices
-        :param thresholds: tuple of thresholds to binarize the feature values
+        :param initial_thresholds: tuple of thresholds to binarize the feature values
         """
         self.features = features
         self.scores = scores
-        self.thresholds = thresholds
+        self.initial_thresholds = initial_thresholds
 
-        self.logger = logging.getLogger(__name__)
+        self.thresholds = list(initial_thresholds)
         self.scores_vec = np.array(scores)
+        self.logger = logging.getLogger(__name__)
         self.calibrator = None
 
     def fit(self, X, y) -> "_ClassifierAtK":
-        # TODO we need to fit the remaining splitting thresholds, i.e. when doing l-step lookahead, l thresholds need to be fitted.
-        for f, s, t in zip(self.features, self.scores, self.thresholds):
-            is_data_binary = np.unique(X[f]) == [0, 1]
+        for i, (f, s, t) in enumerate(zip(self.features, self.scores, self.initial_thresholds)):
+            feature_values = X[:, f]
+            is_data_binary = set(np.unique(feature_values).astype(int)) == {0, 1}
             self.logger.debug(f"feature {f} is non-binary, calculating threshold")
-            if is_data_binary and t is None:
-                # fit optimal threshold
-                X[f]
+            if t is None:
+                if not is_data_binary:
+                    # fit optimal threshold
+                    self.thresholds[i] = logarithmic_optimizer(
+                        partial(self._expected_entropy, thresholds_prefix=self.thresholds[:i],
+                                X=X,
+                                features=self.features[:i + 1], scores=self.scores_vec[:i + 1], y=y),
+                        feature_values,
+                        minimize=False)
+                else:
+                    # TODO this can be more efficient. There needs to be no actuall thresholding for truely binary data.
+                    self.thresholds[i] = .5
 
-        scores = self._scores_per_binarized_record(X)
+        scores = self._scores_per_binarized_record(X, self.features, self.scores_vec, self.thresholds)
 
         # compute probabilities
         self.calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
@@ -60,7 +73,8 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         """
         if self.calibrator is None:
             raise NotFittedError()
-        proba_true = self.calibrator.transform(self._scores_per_binarized_record(X))
+        proba_true = self.calibrator.transform(
+            self._scores_per_binarized_record(X, self.features, self.scores_vec, self.thresholds))
         proba = np.vstack([1 - proba_true, proba_true]).T
         return proba
 
@@ -72,21 +86,33 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         :param sample_weight:
         :return:
         """
-        return self._expected_entropy(X)
-
-    def _expected_entropy(self, X):
         if self.calibrator is None:
             raise NotFittedError()
-        scores = self._scores_per_binarized_record(X)
+        if not self.features:
+            return stats_entropy(self.calibrator.transform([[0]]))
+        return self._expected_entropy(self.thresholds[-1], None, self.thresholds[:-1], X,
+                                      self.features, self.scores_vec, self.calibrator)
+
+    @staticmethod
+    def _expected_entropy(threshold, data_slice,
+                          thresholds_prefix, X,
+                          features, scores: np.ndarray,
+                          calibrator=None, y=None):
+        thresholds = thresholds_prefix + [threshold]
+        scores = _ClassifierAtK._scores_per_binarized_record(X, features, scores, thresholds)
+        if calibrator is None:
+            calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
+            calibrator.fit(scores, y)
         total_scores, score_freqs = np.unique(scores, return_counts=True)
-        score_probas = np.array(self.calibrator.transform(total_scores))
+        score_probas = np.array(calibrator.transform(total_scores))
         entropy_values = stats_entropy([score_probas, 1 - score_probas], base=2)
         return np.sum((score_freqs / scores.size) * entropy_values)
 
-    # Helper functions
-    def _scores_per_binarized_record(self, X):
-        temp_X = X[:, self.features]
-        return (np.array(temp_X) >= np.array(self.thresholds)[None, :]).astype("int") @ self.scores_vec
+    @staticmethod
+    def _scores_per_binarized_record(X, features, scores: np.ndarray, thresholds):
+        data = np.array(X)[:, features]
+        thresholds = np.array(thresholds)[None, :]
+        return (data >= thresholds) @ scores
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
@@ -230,16 +256,16 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
     def _fit_and_store_clf_at_k(self, X, y, f=None, s=None, t=None):
         f, s, t = f or [], s or [], t or []
-        k_clf = self._stage_clf(features=f, scores=s, thresholds=t).fit(X, y)
+        k_clf = self._stage_clf(features=f, scores=s, initial_thresholds=t).fit(X, y)
         self.stage_clfs.append(k_clf)
         return k_clf.score(X)
 
     @staticmethod
     def _optimize(features, feature_extension, scores, score_extension, thresholds, clfcls, X, y):
         clf = clfcls(features=features + feature_extension, scores=scores + score_extension,
-                     thresholds=thresholds + [None] * len(feature_extension)).fit(
+                     initial_thresholds=thresholds + [None] * len(feature_extension)).fit(
             X, y)
-        return clf.score(X), feature_extension[0], score_extension[0], thresholds[-1]
+        return clf.score(X), feature_extension[0], score_extension[0], clf.thresholds[len(features)]
 
     @staticmethod
     def _gen_lookahead(list_, lookahead):

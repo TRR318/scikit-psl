@@ -2,7 +2,7 @@ import numpy as np
 from sortedcontainers import SortedSet
 
 
-def logarithmic_minimizer(func: callable, data: np.array) -> float:
+def logarithmic_optimizer(func: callable, data: np.array, minimize=True) -> float:
     """
     This algorithm employs a hierarchical logarithmic search to find the global minimum of a parametrized metric.
 
@@ -15,9 +15,7 @@ def logarithmic_minimizer(func: callable, data: np.array) -> float:
     :return: optimal threshold
     """
     values = np.sort(np.unique(data))
-    # maybe -inf and +inf are not necessary, but better safe (authors where not able to proof optimality otherwise)
-    # if you have a proof, than please send a PR with the proof
-    # as the data is scaled to [0,1] -1 and 2 are effectively -inf and + inf. otherwise inverse transform does not work
+    # Adding the extremal values <min and >max might not be necessary, but it is not trivial to proof.
     cuts = np.concatenate([[data.min() - 1], (values[:-1] + values[1:]) / 2, [data.max() + 1]])
     minimal_points = set()
     min_ = np.inf
@@ -30,7 +28,7 @@ def logarithmic_minimizer(func: callable, data: np.array) -> float:
         while to_evaluate:
             k = to_evaluate.pop()
             evaluated.add(k)
-            entropy = func(cuts[k], data)
+            entropy = (-1)**int(not minimize) * func(cuts[k], data)
             if entropy < min_:
                 min_ = entropy
                 thresh = cuts[k]

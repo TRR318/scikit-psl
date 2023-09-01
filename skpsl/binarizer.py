@@ -7,7 +7,7 @@ from scipy.stats import entropy
 from sklearn.base import TransformerMixin, BaseEstimator
 from sklearn.exceptions import NotFittedError
 
-from skpsl.data.util import logarithmic_minimizer
+from skpsl.data.util import logarithmic_optimizer
 
 logger = logging.getLogger()
 
@@ -21,7 +21,7 @@ class MinEntropyBinarizer(BaseEstimator, TransformerMixin, auto_wrap_output_keys
             uniq = np.unique(x)
             if uniq.size < 3:
                 return np.min(uniq) + (np.max(uniq) - np.min(uniq)) / 2
-            return logarithmic_minimizer(partial(MinEntropyBinarizer._cut_entropy, y=y), x)
+            return logarithmic_optimizer(partial(MinEntropyBinarizer._cut_entropy, y=y), x)
 
         self.threshs = np.apply_along_axis(binarize, 0, X)
         return self
