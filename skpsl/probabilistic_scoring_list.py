@@ -1,5 +1,4 @@
 import logging
-from functools import partial
 from itertools import combinations, product, repeat
 from typing import List, Union
 
@@ -37,17 +36,19 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         self.calibrator = None
 
     def fit(self, X, y) -> "_ClassifierAtK":
-        for i, (f, s, t) in enumerate(zip(self.features, self.scores, self.initial_thresholds)):
+        for i, (f, t) in enumerate(zip(self.features, self.initial_thresholds)):
             feature_values = X[:, f]
             is_data_binary = set(np.unique(feature_values).astype(int)) == {0, 1}
             self.logger.debug(f"feature {f} is non-binary, calculating threshold")
             if t is np.nan and not is_data_binary:
-                    # fit optimal threshold
-                    self.thresholds[i] = logarithmic_optimizer(
-                        partial(self._expected_entropy, thresholds_prefix=self.thresholds[:i],
-                                X=X,
-                                features=self.features[:i + 1], scores=self.scores_vec[:i + 1], y=y),
-                        feature_values)
+                # fit optimal threshold
+                self.thresholds[i] = logarithmic_optimizer(
+                    lambda t_, _: self._expected_entropy(
+                        X=X, y=y,
+                        features=self.features[:i + 1],
+                        scores=self.scores_vec[:i + 1],
+                        thresholds=self.thresholds[:i] + [t_]),
+                    feature_values)
 
         scores = self._scores_per_binarized_record(X, self.features, self.scores_vec, self.thresholds)
 
@@ -85,17 +86,14 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
             raise NotFittedError()
         if not self.features:
             return stats_entropy(self.calibrator.transform([[0]]))
-        return self._expected_entropy(self.thresholds[-1], None, self.thresholds[:-1], X,
-                                      self.features, self.scores_vec, self.calibrator)
+        return self._expected_entropy(X, self.features, self.scores_vec, self.thresholds, calibrator=self.calibrator)
 
     @staticmethod
-    def _expected_entropy(threshold, data_slice,
-                          thresholds_prefix, X,
-                          features, scores: np.ndarray,
-                          calibrator=None, y=None):
-        thresholds = thresholds_prefix + [threshold]
+    def _expected_entropy(X, features, scores: np.ndarray, thresholds, calibrator=None, y=None):
         scores = _ClassifierAtK._scores_per_binarized_record(X, features, scores, thresholds)
         if calibrator is None:
+            if y is None:
+                raise AttributeError("_expected_entropy must not be called with both 'calibrator' and 'y' being None")
             calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
             calibrator.fit(scores, y)
         total_scores, score_freqs = np.unique(scores, return_counts=True)
@@ -234,7 +232,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             all_total_scores.append(all_total_scores[i] | {prev_sum + score for prev_sum in all_total_scores[i]})
 
         data = []
-        for clf, T in zip(self.stage_clfs[:k +1], all_total_scores):
+        for clf, T in zip(self.stage_clfs[:k + 1], all_total_scores):
             a = {t: np.nan for t in all_total_scores[-1]}
             probas = clf.calibrator.transform(np.array(list(T)))
             a.update(dict(zip(T, probas)))
