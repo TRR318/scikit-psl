@@ -72,17 +72,17 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     def _scores_per_binarized_record(self, X):
         temp_X = X[:, self.features]
         return self._binarize(temp_X) @ self.scores_vec
-  
+
     def _binarize(self, X) -> np.array:
         ts = np.array(self.thresholds)
-        return X >= ts[None,:].astype("int")
+        return X >= ts[None, :].astype("int")
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     """
     Probabilistic scoring list classifier.
     A probabilistic classifier that greedily creates a PSL selecting one feature at a time
-    """ 
+    """
 
     def __init__(self, score_set, entropy_threshold=-1):
         """ IMPORTANT: Shannon entropy is calculated with respect to base 2
@@ -126,9 +126,9 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             features_to_consider = remaining_features if predef_features is None else [predef_features[stage - 1]]
             scores_to_consider = self.sorted_score_set if predef_scores is None else [predef_scores[stage - 1]]
 
-
             entropies, f, s, t = zip(*Parallel(n_jobs=n_jobs)(
-                delayed(self._optimize)(self.features, f_seq, self.scores, list(s_seq), self.thresholds, self._stage_clf, X, y)
+                delayed(self._optimize)(self.features, f_seq, self.scores, list(s_seq), self.thresholds,
+                                        self._stage_clf, X, y)
                 for (f_seq, s_seq) in product(
                     self._gen_lookahead(features_to_consider, l),
                     # cartesian power of scores
@@ -139,7 +139,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             i = np.argmin(entropies)
             remaining_features.remove(f[i])
 
-            expected_entropy = self._fit_and_store_clf_at_k(X, y, self.features + [f[i]], self.scores + [s[i]], self.thresholds + [t[i]])
+            expected_entropy = self._fit_and_store_clf_at_k(X, y, self.features + [f[i]], self.scores + [s[i]],
+                                                            self.thresholds + [t[i]])
         return self
 
     def predict(self, X, k=-1):
@@ -206,7 +207,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     @property
     def scores(self):
         return self.stage_clfs[-1].scores if self.stage_clfs else []
-    
+
     @property
     def thresholds(self):
         return self.stage_clfs[-1].thresholds if self.stage_clfs else []
@@ -219,7 +220,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
     @staticmethod
     def _optimize(features, feature_extension, scores, score_extension, thresholds, clfcls, X, y):
-        clf = clfcls(features=features + feature_extension, scores=scores + score_extension, thresholds=thresholds ).fit(X, y)
+        clf = clfcls(features=features + feature_extension, scores=scores + score_extension, thresholds=thresholds).fit(
+            X, y)
         return clf.score(X), feature_extension[0], score_extension[0], thresholds[-1]
 
     @staticmethod
@@ -230,13 +232,13 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         seqs = next((seq for seq in combination_seqs if seq))
         return seqs
 
+
 if __name__ == '__main__':
     from sklearn.datasets import make_classification
     from sklearn.model_selection import cross_val_score
 
     # Generating synthetic data with continuous features and a binary target variable
     X, y = make_classification(random_state=42)
-    
     X = (X > 0.5).astype(int)
 
     clf = ProbabilisticScoringList([-1, 1, 2])
