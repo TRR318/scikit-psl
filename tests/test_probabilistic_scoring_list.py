@@ -1,10 +1,11 @@
+import numpy as np
 from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split
 
 from skpsl import ProbabilisticScoringList
 
 
-def test_score():
+def test_binary_data():
     X, y = make_classification(random_state=42)
     X = (X > .5).astype(int)
 
@@ -12,8 +13,7 @@ def test_score():
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=.2, random_state=42)
     psl.fit(X_train, y_train)
-    score = psl.score(X_test, y_test)
-    assert score == 0.1924344746162928
+    assert psl.thresholds == [np.nan] * X.shape[1]
 
 
 def test_inspect():

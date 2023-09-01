@@ -20,7 +20,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     Internal class for the classifier at stage k of the probabilistic scoring list
     """
 
-    def __init__(self, features: tuple[int], scores: tuple[int], initial_thresholds: tuple[Union[float, None]]):
+    def __init__(self, features: tuple[int], scores: tuple[int], initial_thresholds: tuple[Union[float]]):
         """
 
         :param features: tuple of feature indices. used for selecting data from X
@@ -41,17 +41,13 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
             feature_values = X[:, f]
             is_data_binary = set(np.unique(feature_values).astype(int)) == {0, 1}
             self.logger.debug(f"feature {f} is non-binary, calculating threshold")
-            if t is None:
-                if not is_data_binary:
+            if t is np.nan and not is_data_binary:
                     # fit optimal threshold
                     self.thresholds[i] = logarithmic_optimizer(
                         partial(self._expected_entropy, thresholds_prefix=self.thresholds[:i],
                                 X=X,
                                 features=self.features[:i + 1], scores=self.scores_vec[:i + 1], y=y),
                         feature_values)
-                else:
-                    # TODO this can be more efficient. There needs to be no actuall thresholding for truely binary data.
-                    self.thresholds[i] = .5
 
         scores = self._scores_per_binarized_record(X, self.features, self.scores_vec, self.thresholds)
 
@@ -109,9 +105,12 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
     @staticmethod
     def _scores_per_binarized_record(X, features, scores: np.ndarray, thresholds):
+        if not features:
+            return np.zeros(X.shape[0])
         data = np.array(X)[:, features]
-        thresholds = np.array(thresholds)[None, :]
-        return (data > thresholds) @ scores
+        thresholds = np.array(thresholds)
+        thresholds[np.isnan(thresholds)] = .5
+        return (data > thresholds[None, :]) @ scores
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
@@ -227,28 +226,28 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         """
         k = k or len(self.stage_clfs) - 1
 
-        pdfs = [clf.calibrator for clf in self.stage_clfs[:k + 1]]
-        scores = np.array(self.stage_clfs[k].scores)
+        scores = self.stage_clfs[k].scores
+        thresholds = self.stage_clfs[k].thresholds
 
-        all_total_scores = [[0]]
-        total_scores = {0}
-        for score in scores:
-            total_scores |= {prev_sum + score for prev_sum in total_scores}
-            all_total_scores.append(np.array(sorted(total_scores)))
+        all_total_scores = [{0}]
+        for i, score in enumerate(scores):
+            all_total_scores.append(all_total_scores[i] | {prev_sum + score for prev_sum in all_total_scores[i]})
 
         data = []
-        for pdf, T in zip(pdfs, all_total_scores):
+        for clf, T in zip(self.stage_clfs[:k +1], all_total_scores):
             a = {t: np.nan for t in all_total_scores[-1]}
-            a.update({t: v for t, v in zip(T, pdf.transform(T))})
+            probas = clf.calibrator.transform(np.array(list(T)))
+            a.update(dict(zip(T, probas)))
             data.append(a)
 
         df = pd.DataFrame(data)
+        df = df[sorted(df.columns)]
         df.columns = [f"T = {t_}" for t_ in df.columns]
-        df.insert(0, "Score", np.array([np.nan] + list(self.stage_clfs[k].scores)))
+        df.insert(0, "Score", np.array([np.nan] + list(scores)))
         if feature_names is not None:
             df.insert(0, "Feature", [np.nan] + feature_names[:k] + [np.nan] * (k - len(feature_names)))
-        if all(t is not None for t in self.stage_clfs[k].thresholds):
-            df.insert(0, "Threshold", [np.nan] + [f">{t:.4f}" for t in self.stage_clfs[k].thresholds])
+        if not all(np.isnan(t) for t in thresholds):
+            df.insert(0, "Threshold", [np.nan] + [(np.nan if np.isnan(t) else f">{t:.4f}") for t in thresholds])
         return df.reset_index(names=["Stage"])
 
     @property
@@ -272,7 +271,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     @staticmethod
     def _optimize(features, feature_extension, scores, score_extension, thresholds, clfcls, X, y):
         clf = clfcls(features=features + feature_extension, scores=scores + score_extension,
-                     initial_thresholds=thresholds + [None] * len(feature_extension)).fit(
+                     initial_thresholds=thresholds + [np.nan] * len(feature_extension)).fit(
             X, y)
         return clf.score(X), feature_extension[0], score_extension[0], clf.thresholds[len(features)]
 
