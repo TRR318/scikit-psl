@@ -6,6 +6,7 @@ from skpsl import MinEntropyBinarizer, ProbabilisticScoringList
 
 if __name__ == '__main__':
     X, y = make_classification(n_informative=10, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=.2, random_state=42)
 
     # The MinEntropyBinarizer calculates an optimal threshold beforehand.
     # It will calculate a threshold for binarizing the continuous data
@@ -13,8 +14,6 @@ if __name__ == '__main__':
     # The PSL than operates on the binary data
     pipe = Pipeline([("binarizer", MinEntropyBinarizer()),
                      ("psl", ProbabilisticScoringList({-1, 1, 2}))])
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=.2, random_state=42)
     pipe.fit(X_train, y_train)
     print(f"Brier score: {pipe.score(X_test, y_test):.4f}")
     # >  Brier score: 0.2184  (lower is better)

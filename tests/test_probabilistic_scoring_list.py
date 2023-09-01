@@ -1,8 +1,9 @@
 import numpy as np
 from sklearn.datasets import make_classification
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.pipeline import Pipeline
 
-from skpsl import ProbabilisticScoringList
+from skpsl import ProbabilisticScoringList, MinEntropyBinarizer
 
 
 def test_binary_data():
@@ -27,3 +28,18 @@ def test_inspect():
     psl.fit(X_train, y_train)
     df = psl.inspect(3)
     print(df.to_string(index=False, na_rep="-", justify="center", float_format=lambda x: f"{x:.2f}"))
+
+
+def test_improvement_for_internalized_binarization():
+    X, y = make_classification(n_features=6, n_informative=4, random_state=42)
+
+    clf_ = Pipeline([("binarizer", MinEntropyBinarizer()),
+                     ("psl", ProbabilisticScoringList({-1, 1, 2}))])
+    pipe_score = cross_val_score(clf_, X, y, cv=5).mean()
+
+    clf_ = ProbabilisticScoringList({-1, 1, 2})
+    psl_score = cross_val_score(clf_, X, y, cv=5).mean()
+
+    # lower score is better
+    # the internalized binarization should perform better
+    assert psl_score < pipe_score
