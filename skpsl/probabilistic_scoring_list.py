@@ -318,7 +318,10 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             df.insert(
                 0,
                 "Feature Index",
-                [np.nan] + features[:k] + [np.nan] * (k - len(features)),
+                pd.Series(
+                    [np.nan] + features[:k] + [np.nan] * (k - len(features)),
+                    dtype="Int64",
+                ),
             )
         if not all(np.isnan(t) for t in thresholds):
             df.insert(
