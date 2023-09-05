@@ -1,6 +1,6 @@
 import logging
 from itertools import combinations, product, repeat
-from typing import List, Union
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -19,7 +19,12 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     Internal class for the classifier at stage k of the probabilistic scoring list
     """
 
-    def __init__(self, features: tuple[int], scores: tuple[int], initial_thresholds: tuple[Union[float]]):
+    def __init__(
+        self,
+        features: tuple[int],
+        scores: tuple[int],
+        initial_thresholds: tuple[Optional[float]],
+    ):
         """
 
         :param features: tuple of feature indices. used for selecting data from X
@@ -44,16 +49,23 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
                 # fit optimal threshold
                 self.thresholds[i] = binary_search_optimizer(
                     lambda t_, _: self._expected_entropy(
-                        X=X, y=y,
-                        features=self.features[:i + 1],
-                        scores=self.scores_vec[:i + 1],
-                        thresholds=self.thresholds[:i] + [t_]),
-                    feature_values)
+                        X=X,
+                        y=y,
+                        features=self.features[: i + 1],
+                        scores=self.scores_vec[: i + 1],
+                        thresholds=self.thresholds[:i] + [t_],
+                    ),
+                    feature_values,
+                )
 
-        scores = self._scores_per_binarized_record(X, self.features, self.scores_vec, self.thresholds)
+        scores = self._scores_per_binarized_record(
+            X, self.features, self.scores_vec, self.thresholds
+        )
 
         # compute probabilities
-        self.calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
+        self.calibrator = IsotonicRegression(
+            y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip"
+        )
         self.calibrator.fit(scores, y)
 
         return self
@@ -70,7 +82,10 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         if self.calibrator is None:
             raise NotFittedError()
         proba_true = self.calibrator.transform(
-            self._scores_per_binarized_record(X, self.features, self.scores_vec, self.thresholds))
+            self._scores_per_binarized_record(
+                X, self.features, self.scores_vec, self.thresholds
+            )
+        )
         proba = np.vstack([1 - proba_true, proba_true]).T
         return proba
 
@@ -86,15 +101,29 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
             raise NotFittedError()
         if not self.features:
             return stats_entropy(self.calibrator.transform([[0]]))
-        return self._expected_entropy(X, self.features, self.scores_vec, self.thresholds, calibrator=self.calibrator)
+        return self._expected_entropy(
+            X,
+            self.features,
+            self.scores_vec,
+            self.thresholds,
+            calibrator=self.calibrator,
+        )
 
     @staticmethod
-    def _expected_entropy(X, features, scores: np.ndarray, thresholds, calibrator=None, y=None):
-        scores = _ClassifierAtK._scores_per_binarized_record(X, features, scores, thresholds)
+    def _expected_entropy(
+        X, features, scores: np.ndarray, thresholds, calibrator=None, y=None
+    ):
+        scores = _ClassifierAtK._scores_per_binarized_record(
+            X, features, scores, thresholds
+        )
         if calibrator is None:
             if y is None:
-                raise AttributeError("_expected_entropy must not be called with both 'calibrator' and 'y' being None")
-            calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
+                raise AttributeError(
+                    "_expected_entropy must not be called with both 'calibrator' and 'y' being None"
+                )
+            calibrator = IsotonicRegression(
+                y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip"
+            )
             calibrator.fit(scores, y)
         total_scores, score_freqs = np.unique(scores, return_counts=True)
         score_probas = np.array(calibrator.transform(total_scores))
@@ -107,7 +136,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
             return np.zeros(X.shape[0])
         data = np.array(X)[:, features]
         thresholds = np.array(thresholds)
-        thresholds[np.isnan(thresholds)] = .5
+        thresholds[np.isnan(thresholds)] = 0.5
         return (data > thresholds[None, :]) @ scores
 
 
@@ -129,10 +158,12 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.logger = logging.getLogger(__name__)
         self.sorted_score_set = sorted(self.score_set, reverse=True)
         self._stage_clf = _ClassifierAtK
-        self.stage_clfs = []  # type: List[_ClassifierAtK]
+        self.stage_clfs = []  # type: list[_ClassifierAtK]
 
-    def fit(self, X, y, lookahead=1, n_jobs=1, predef_features=None, predef_scores=None) -> "ProbabilisticScoringList":
-        """ 
+    def fit(
+        self, X, y, lookahead=1, n_jobs=1, predef_features=None, predef_scores=None
+    ) -> "ProbabilisticScoringList":
+        """
         Fits a probabilistic scoring list to the given data
 
         :param X:
@@ -148,37 +179,65 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         remaining_features = list(range(number_features))
 
         if predef_features is not None and len(predef_features) != number_features:
-            raise ValueError("Predefined features must be a permutation of all features!")
+            raise ValueError(
+                "Predefined features must be a permutation of all features!"
+            )
 
         stage = 0
 
-        # first 
+        # first
         expected_entropy = self._fit_and_store_clf_at_k(X, y)
 
         while remaining_features and expected_entropy > self.entropy_threshold:
             stage += 1
 
             # noinspection PyUnresolvedReferences
-            features_to_consider = remaining_features if predef_features is None else [predef_features[stage - 1]]
-            scores_to_consider = self.sorted_score_set if predef_scores is None else [predef_scores[stage - 1]]
+            features_to_consider = (
+                remaining_features
+                if predef_features is None
+                else [predef_features[stage - 1]]
+            )
+            scores_to_consider = (
+                self.sorted_score_set
+                if predef_scores is None
+                else [predef_scores[stage - 1]]
+            )
 
-            entropies, f, s, t = zip(*Parallel(n_jobs=n_jobs)(
-                delayed(self._optimize)(self.features, f_seq, self.scores, list(s_seq), self.thresholds,
-                                        self._stage_clf, X, y)
-                for (f_seq, s_seq) in product(
-                    self._gen_lookahead(features_to_consider, lookahead),
-                    # cartesian power of scores
-                    product(*repeat(scores_to_consider, min(lookahead, len(features_to_consider))))
+            entropies, f, s, t = zip(
+                *Parallel(n_jobs=n_jobs)(
+                    delayed(self._optimize)(
+                        self.features,
+                        f_seq,
+                        self.scores,
+                        list(s_seq),
+                        self.thresholds,
+                        self._stage_clf,
+                        X,
+                        y,
+                    )
+                    for (f_seq, s_seq) in product(
+                        self._gen_lookahead(features_to_consider, lookahead),
+                        # cartesian power of scores
+                        product(
+                            *repeat(
+                                scores_to_consider,
+                                min(lookahead, len(features_to_consider)),
+                            )
+                        ),
+                    )
                 )
-            ))
+            )
 
             i = np.argmin(entropies)
             remaining_features.remove(f[i])
 
-            expected_entropy = self._fit_and_store_clf_at_k(X, y,
-                                                            self.features + [f[i]],
-                                                            self.scores + [s[i]],
-                                                            self.thresholds + [t[i]])
+            expected_entropy = self._fit_and_store_clf_at_k(
+                X,
+                y,
+                self.features + [f[i]],
+                self.scores + [s[i]],
+                self.thresholds + [t[i]],
+            )
         return self
 
     def predict(self, X, k=-1):
@@ -199,14 +258,16 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :return:
         """
         if not self.stage_clfs:
-            raise NotFittedError("Please fit the probabilistic scoring classifier before usage.")
+            raise NotFittedError(
+                "Please fit the probabilistic scoring classifier before usage."
+            )
 
         return self.stage_clfs[k].predict_proba(X)
 
     def score(self, X, y, k=-1, sample_weight=None):
         """
         Calculates the Brier score of the model
-        :param X:   
+        :param X:
         :param y:
         :param k: Classifier stage to use for prediction
         :param sample_weight: ignored
@@ -225,14 +286,18 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         k = k or len(self.stage_clfs) - 1
 
         scores = self.stage_clfs[k].scores
+        features = self.stage_clfs[k].features
         thresholds = self.stage_clfs[k].thresholds
 
         all_total_scores = [{0}]
         for i, score in enumerate(scores):
-            all_total_scores.append(all_total_scores[i] | {prev_sum + score for prev_sum in all_total_scores[i]})
+            all_total_scores.append(
+                all_total_scores[i]
+                | {prev_sum + score for prev_sum in all_total_scores[i]}
+            )
 
         data = []
-        for clf, T in zip(self.stage_clfs[:k + 1], all_total_scores):
+        for clf, T in zip(self.stage_clfs[: k + 1], all_total_scores):
             a = {t: np.nan for t in all_total_scores[-1]}
             probas = clf.calibrator.transform(np.array(list(T)))
             a.update(dict(zip(T, probas)))
@@ -243,9 +308,25 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         df.columns = [f"T = {t_}" for t_ in df.columns]
         df.insert(0, "Score", np.array([np.nan] + list(scores)))
         if feature_names is not None:
-            df.insert(0, "Feature", [np.nan] + feature_names[:k] + [np.nan] * (k - len(feature_names)))
+            feature_names = [feature_names[i] for i in features]
+            df.insert(
+                0,
+                "Feature",
+                [np.nan] + feature_names[:k] + [np.nan] * (k - len(feature_names)),
+            )
+        else:
+            df.insert(
+                0,
+                "Feature Index",
+                [np.nan] + features[:k] + [np.nan] * (k - len(features)),
+            )
         if not all(np.isnan(t) for t in thresholds):
-            df.insert(0, "Threshold", [np.nan] + [(np.nan if np.isnan(t) else f">{t:.4f}") for t in thresholds])
+            df.insert(
+                0,
+                "Threshold",
+                [np.nan]
+                + [(np.nan if np.isnan(t) else f">{t:.4f}") for t in thresholds],
+            )
         return df.reset_index(names=["Stage"])
 
     @property
@@ -267,22 +348,34 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         return k_clf.score(X)
 
     @staticmethod
-    def _optimize(features, feature_extension, scores, score_extension, thresholds, clfcls, X, y):
-        clf = clfcls(features=features + feature_extension, scores=scores + score_extension,
-                     initial_thresholds=thresholds + [np.nan] * len(feature_extension)).fit(
-            X, y)
-        return clf.score(X), feature_extension[0], score_extension[0], clf.thresholds[len(features)]
+    def _optimize(
+        features, feature_extension, scores, score_extension, thresholds, clfcls, X, y
+    ):
+        clf = clfcls(
+            features=features + feature_extension,
+            scores=scores + score_extension,
+            initial_thresholds=thresholds + [np.nan] * len(feature_extension),
+        ).fit(X, y)
+        return (
+            clf.score(X),
+            feature_extension[0],
+            score_extension[0],
+            clf.thresholds[len(features)],
+        )
 
     @staticmethod
     def _gen_lookahead(list_, lookahead):
         # generate sequences of shortening lookaheads (because combinations returns empty list if len(list) < l)
-        combination_seqs = ([list(tup) for tup in combinations(list_, _l)] for _l in range(lookahead, 0, -1))
+        combination_seqs = (
+            [list(tup) for tup in combinations(list_, _l)]
+            for _l in range(lookahead, 0, -1)
+        )
         # get first non-empty sequence
         seqs = next((seq for seq in combination_seqs if seq))
         return seqs
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     from sklearn.datasets import make_classification
     from sklearn.model_selection import cross_val_score
 
