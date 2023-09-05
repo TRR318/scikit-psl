@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "scikit-psl"
-version = "0.2.0"
+version = "0.3.0"
 description = "Probabilistic Scoring List classifier"
 license = "MIT"
 authors = ["Stefan Heid <stefan.heid@upb.de>", "Jonas Hanselle <jonas.hanselle@ifi.lmu.de>"]
@@ -12,20 +12,16 @@ packages = [{ include = "skpsl" }]
 python = ">=3.9,<3.13"
 scikit-learn = "^1.3.0"
 numpy = "^1.25.2"
-scipy = "^1.11.1"
+scipy = "^1.11.2"
 joblib = "^1.3.2"
-pandas = "^2.0.3"
+pandas = "^2.1.0"
+sortedcontainers = "^2.4.0"
 
-sphinx = { version = "^7.1", optional = true }
-sphinx_rtd_theme = { version = "^1.2", optional = true  }
+[tool.poetry.group.dev.dependencies]
+sphinx = "^7.2.5"
+sphinx_rtd_theme = "^1.3"
 
-pytest = { version = "^7.4", optional = true }
-
-
-[tool.poetry.extras]
-doc = ["sphinx", "sphinx_rtd_theme"]
-test = ["pytest"]
-
+pytest = "^7.4"
 
 [build-system]
 requires = ["poetry-core"]

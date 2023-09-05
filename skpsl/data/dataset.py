@@ -20,7 +20,7 @@ def lookahead_example():
         score, invscore = [_ClassifierAtK(features=f, scores=s_).fit(X_, y_, ).score(X_) for s_ in permutations(s)]
         if score > invscore:
             score_l1 = psl.score(X_, y_)
-            l2_psl = ProbabilisticScoringList(s).fit(X_, y_, l=2)
+            l2_psl = ProbabilisticScoringList(s).fit(X_, y_, lookahead=2)
             score_l2 = l2_psl.score(X_, y_)
             if score_l2 < score_l1:
                 print(
@@ -45,7 +45,7 @@ if __name__ == '__main__':
             l1_out = l1_psl.score(X_[test_index], y_[test_index])
             l1_in = l1_psl.score(X_[train_index], y_[train_index])
 
-            l2_psl = ProbabilisticScoringList(s).fit(X_[train_index], y_[train_index], l=2)
+            l2_psl = ProbabilisticScoringList(s).fit(X_[train_index], y_[train_index], lookahead=2)
             l2_out = l2_psl.score(X_[test_index], y_[test_index])
             l2_in = l2_psl.score(X_[train_index], y_[train_index])
             if l1_in > l2_in:
