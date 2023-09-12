@@ -100,7 +100,8 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         if self.calibrator is None:
             raise NotFittedError()
         if not self.features:
-            return stats_entropy(self.calibrator.transform([[0]]))
+            p_pos = self.calibrator.transform([[0]])
+            return stats_entropy([p_pos, 1 - p_pos])
         return self._expected_entropy(
             X,
             self.features,
@@ -156,7 +157,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.entropy_threshold = entropy_threshold
 
         self.logger = logging.getLogger(__name__)
-        self.sorted_score_set = sorted(self.score_set, reverse=True)
+        self.sorted_score_set = sorted(self.score_set, reverse=True, key=abs)
         self._stage_clf = _ClassifierAtK
         self.stage_clfs = []  # type: list[_ClassifierAtK]
 

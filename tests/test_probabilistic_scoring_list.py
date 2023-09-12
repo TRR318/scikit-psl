@@ -43,3 +43,20 @@ def test_improvement_for_internalized_binarization():
     # lower score is better
     # the internalized binarization should perform better
     assert psl_score < pipe_score
+
+
+def test_gh1_maximally_negative_score_for_first_feature():
+    X, y = make_classification(n_features=6, n_informative=4, random_state=42)
+    X = (X > .5).astype(int)
+    y = 1 -X[:,2]
+    psl = ProbabilisticScoringList({-2, -1, 1, 2})
+    psl.fit(X, y)
+    assert psl.scores[0] == -2
+
+
+def test_only_negative_classes():
+    X, y = make_classification(n_features=6, n_informative=4, random_state=42)
+    y.fill(0)
+    psl = ProbabilisticScoringList({-2, -1, 1, 2})
+    psl.fit(X, y)
+    assert not np.isnan(psl.stage_clfs[0].score(X))
