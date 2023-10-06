@@ -5,12 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0 - UNPUBLISHED 2023-10-06
+
+### Added
+
+- Add brute force threshold optimization method to find the global optimum, bisect optimizer remains default method
+
 ## 0.3.1 - 2023-09-12
 
 ### Fixed
 
 - PSL is now correctly handles when all instances belong to the negative class
-- #1 if the first feature is assigned a negative score, it is now assigned the most negative score
+- [#1](../../issues/1) if the first feature is assigned a negative score, it is now assigned the most negative score
 
 ## 0.3.0 - 2023-08-10
 
