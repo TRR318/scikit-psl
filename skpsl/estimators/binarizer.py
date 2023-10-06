@@ -7,7 +7,7 @@ from scipy.stats import entropy
 from sklearn.base import TransformerMixin, BaseEstimator
 from sklearn.exceptions import NotFittedError
 
-from skpsl.data.util import resolve_optimizer
+from skpsl.helper import create_optimizer
 
 logger = logging.getLogger()
 
@@ -17,7 +17,7 @@ class MinEntropyBinarizer(BaseEstimator, TransformerMixin, auto_wrap_output_keys
         self.method = method
 
         self.threshs = None
-        self._optimizer = resolve_optimizer(method)
+        self._optimizer = create_optimizer(method)
 
     def fit(self, X, y=None):
         def binarize(x):

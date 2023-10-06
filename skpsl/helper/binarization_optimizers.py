@@ -2,7 +2,7 @@ import numpy as np
 from sortedcontainers import SortedSet
 
 
-def resolve_optimizer(method: str):
+def create_optimizer(method: str):
     match method:
         case "bisect":
             return binary_search_optimizer

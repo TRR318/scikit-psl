@@ -11,7 +11,8 @@ from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss
 
-from skpsl.data.util import resolve_optimizer
+from skpsl.helper import create_optimizer
+from skpsl.helper.metrics import expected_entropy
 
 
 class _ClassifierAtK(BaseEstimator, ClassifierMixin):
@@ -50,25 +51,22 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
                 self.logger.debug(f"feature {f} is non-binary and threshold not set: calculating threshold...")
                 # fit optimal threshold
                 self.thresholds[i] = self.threshold_optimizer(
-                    lambda t_, _: self._expected_entropy(
+                    lambda t_, _: expected_entropy(self._compute_total_scores(
                         X=X,
-                        y=y,
                         features=self.features[: i + 1],
                         scores=self.scores_vec[: i + 1],
-                        thresholds=self.thresholds[:i] + [t_],
+                        thresholds=self.thresholds[:i] + [t_]), y
                     ),
                     feature_values,
                 )
 
-        scores = self._scores_per_binarized_record(
-            X, self.features, self.scores_vec, self.thresholds
-        )
+        total_scores = self._compute_total_scores(X, self.features, self.scores_vec, self.thresholds)
 
         # compute probabilities
         self.calibrator = IsotonicRegression(
             y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip"
         )
-        self.calibrator.fit(scores, y)
+        self.calibrator.fit(total_scores, y)
 
         return self
 
@@ -84,9 +82,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         if self.calibrator is None:
             raise NotFittedError()
         proba_true = self.calibrator.transform(
-            self._scores_per_binarized_record(
-                X, self.features, self.scores_vec, self.thresholds
-            )
+            self._compute_total_scores(X, self.features, self.scores_vec, self.thresholds)
         )
         proba = np.vstack([1 - proba_true, proba_true]).T
         return proba
@@ -104,37 +100,11 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         if not self.features:
             p_pos = self.calibrator.transform([[0]])
             return stats_entropy([p_pos, 1 - p_pos])
-        return self._expected_entropy(
-            X,
-            self.features,
-            self.scores_vec,
-            self.thresholds,
-            calibrator=self.calibrator,
-        )
+        total_scores = self._compute_total_scores(X, self.features, self.scores_vec, self.thresholds)
+        return expected_entropy(total_scores, calibrator=self.calibrator)
 
     @staticmethod
-    def _expected_entropy(
-            X, features, scores: np.ndarray, thresholds, calibrator=None, y=None
-    ):
-        scores = _ClassifierAtK._scores_per_binarized_record(
-            X, features, scores, thresholds
-        )
-        if calibrator is None:
-            if y is None:
-                raise AttributeError(
-                    "_expected_entropy must not be called with both 'calibrator' and 'y' being None"
-                )
-            calibrator = IsotonicRegression(
-                y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip"
-            )
-            calibrator.fit(scores, y)
-        total_scores, score_freqs = np.unique(scores, return_counts=True)
-        score_probas = np.array(calibrator.transform(total_scores))
-        entropy_values = stats_entropy([score_probas, 1 - score_probas], base=2)
-        return np.sum((score_freqs / scores.size) * entropy_values)
-
-    @staticmethod
-    def _scores_per_binarized_record(X, features, scores: np.ndarray, thresholds):
+    def _compute_total_scores(X, features, scores: np.ndarray, thresholds):
         if not features:
             return np.zeros(X.shape[0])
         data = np.array(X)[:, features]
@@ -159,13 +129,15 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.entropy_threshold = entropy_threshold
         self.method = method
 
-        self._thresh_optimizer = resolve_optimizer(method)
+        self._thresh_optimizer = create_optimizer(method)
         self.logger = logging.getLogger(__name__)
-        self.sorted_score_set = sorted(self.score_set, reverse=True, key=abs)
+        self.sorted_score_set = np.array(sorted(self.score_set, reverse=True, key=abs))
         self.stage_clfs = []  # type: list[_ClassifierAtK]
 
     def fit(
-            self, X, y, lookahead=1, n_jobs=1, predef_features=None, predef_scores=None
+            self, X, y, lookahead=1, n_jobs=1,
+            predef_features: Optional[np.ndarray] = None,
+            predef_scores: Optional[np.ndarray] = None
     ) -> "ProbabilisticScoringList":
         """
         Fits a probabilistic scoring list to the given data
