@@ -11,7 +11,7 @@ PSLs can be seen as a extension to *scoring systems* in two ways:
 
 Scoring Systems are used as decision support for human experts in medical or law domains.
 
-The implementation adheres to the [sklearn-api](https://scikit-learn.org/stable/glossary.html#glossary-estimator-types).
+This implementation adheres to the [sklearn-api](https://scikit-learn.org/stable/glossary.html#glossary-estimator-types).
 
 # Install
 ```bash

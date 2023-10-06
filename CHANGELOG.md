@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add brute force threshold optimization method to find the global optimum, bisect optimizer remains default method
 
+### Changed
+
+- Restructured source files
+
 ## 0.3.1 - 2023-09-12
 
 ### Fixed
@@ -22,22 +26,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- PSL classifier can now run with continuous data and optimally (wrt. expected entropy) select thresholds to binarize the data
+- PSL classifier can now run with continuous data and optimally (wrt. expected entropy) select thresholds to binarize
+  the data
 
 ### Changed
 
-- Significantly improved optimum calculation for MinEntropyBinarizer (the same optimization algorithm is shared with the psls internal binarization algorithm)
-
+- Significantly improved optimum calculation for MinEntropyBinarizer (the same optimization algorithm is shared with the
+  psls internal binarization algorithm)
 
 ## 0.2.0 - 2023-08-10
 
 ### Added
 
 - PSL classifier
-  - introduced parallelization
-  - implemented l-step lookahead
-  - simple inspect(·) method that creates a tabular representation of the model
-    
+    - introduced parallelization
+    - implemented l-step lookahead
+    - simple inspect(·) method that creates a tabular representation of the model
 
 ## 0.1.0 - 2023-08-08
 
