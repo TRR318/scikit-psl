@@ -5,14 +5,13 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from scipy.stats import entropy as stats_entropy
+from scipy.stats import entropy
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss
 
 from skpsl.helper import create_optimizer
-from skpsl.helper.metrics import expected_entropy
 
 
 class _ClassifierAtK(BaseEstimator, ClassifierMixin):
@@ -51,7 +50,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
                 self.logger.debug(f"feature {f} is non-binary and threshold not set: calculating threshold...")
                 # fit optimal threshold
                 self.thresholds[i] = self.threshold_optimizer(
-                    lambda t_, _: expected_entropy(self._compute_total_scores(
+                    lambda t_, _: self._expected_entropy(self._compute_total_scores(
                         X=X,
                         features=self.features[: i + 1],
                         scores=self.scores_vec[: i + 1],
@@ -99,9 +98,9 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
             raise NotFittedError()
         if not self.features:
             p_pos = self.calibrator.transform([[0]])
-            return stats_entropy([p_pos, 1 - p_pos])
+            return entropy([p_pos, 1 - p_pos])
         total_scores = self._compute_total_scores(X, self.features, self.scores_vec, self.thresholds)
-        return expected_entropy(total_scores, calibrator=self.calibrator)
+        return self._expected_entropy(total_scores, calibrator=self.calibrator)
 
     @staticmethod
     def _compute_total_scores(X, features, scores: np.ndarray, thresholds):
@@ -111,6 +110,22 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         thresholds = np.array(thresholds)
         thresholds[np.isnan(thresholds)] = 0.5
         return (data > thresholds[None, :]) @ scores
+
+    @staticmethod
+    def _expected_entropy(X, y=None, calibrator=None):
+        if calibrator is None:
+            if y is None:
+                raise AttributeError(
+                    "_expected_entropy must not be called with both 'calibrator' and 'y' being None"
+                )
+            calibrator = IsotonicRegression(
+                y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip"
+            )
+            calibrator.fit(X, y)
+        total_scores, score_freqs = np.unique(X, return_counts=True)
+        score_probas = np.array(calibrator.transform(total_scores))
+        entropy_values = entropy([score_probas, 1 - score_probas], base=2)
+        return np.sum((score_freqs / X.size) * entropy_values)
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
