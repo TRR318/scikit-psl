@@ -151,6 +151,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
     def fit(
             self, X, y, lookahead=1, n_jobs=1,
+            one_shot=False,
             predef_features: Optional[np.ndarray] = None,
             predef_scores: Optional[np.ndarray] = None
     ) -> "ProbabilisticScoringList":
@@ -161,6 +162,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param y:
         :param lookahead: steps of look ahead
         :param n_jobs: passed to joblib for parallelization
+        :param one_shot: if this flag is enabled, the algorithm will only evaluate each feature score combination once
         :param predef_features:
         :param predef_scores:
         :return: The fitted classifier
@@ -177,7 +179,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         stage = 0
 
         # first
-        expected_entropy = self._fit_and_store_clf_at_k(X, y)
+        expected_entropy = self._fit_and_store_clf_at_k(X, y, [], [], [])
 
         while remaining_features and expected_entropy > self.entropy_threshold:
             stage += 1
@@ -218,6 +220,24 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                     )
                 )
             )
+
+            if one_shot:
+                df = pd.DataFrame(np.array(entropies).reshape(len(scores_to_consider), -1).T,
+                                  columns=scores_to_consider)
+                best_scores = df.idxmin(1)
+                best_features = df.min(1).argsort()
+                tresh = pd.DataFrame(np.array(t).reshape(len(scores_to_consider), -1).T, columns=scores_to_consider)
+                best_thresholds = [tresh.iloc[
+                                       best_features[i], best_scores[i]] for i in range(len(best_features))]
+                for f, s, t_ in zip(best_features, best_scores, best_thresholds):
+                    self._fit_and_store_clf_at_k(
+                        X,
+                        y,
+                        self.features + [f],
+                        self.scores + [s],
+                        self.thresholds + [t_],
+                    )
+                break
 
             i = np.argmin(entropies)
             remaining_features.remove(f[i])
@@ -332,7 +352,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     def thresholds(self):
         return self.stage_clfs[-1].thresholds if self.stage_clfs else []
 
-    def _fit_and_store_clf_at_k(self, X, y, f=None, s=None, t=None):
+    def _fit_and_store_clf_at_k(self, X, y, f, s, t=None):
         f, s, t = f or [], s or [], t or []
         k_clf = _ClassifierAtK(features=f, scores=s, initial_thresholds=t,
                                threshold_optimizer=self._thresh_optimizer).fit(X, y)
@@ -376,4 +396,4 @@ if __name__ == "__main__":
     X_, y_ = make_classification(random_state=42)
 
     clf_ = ProbabilisticScoringList({-1, 1, 2})
-    print("Brier score:", cross_val_score(clf_, X_, y_, cv=5).mean())
+    print("Brier score:", cross_val_score(clf_, X_, y_, fit_params=dict(one_shot=False), cv=5).mean())
