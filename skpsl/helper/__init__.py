@@ -1,2 +1,1 @@
 from .binarization_optimizers import create_optimizer
-from .metrics import expected_entropy
