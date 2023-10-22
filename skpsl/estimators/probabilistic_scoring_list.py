@@ -12,7 +12,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss
 
 from skpsl.helper import create_optimizer
-
+import heapq
 
 class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     """
@@ -230,6 +230,48 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 self.thresholds + [t[i]],
             )
         return self
+    
+
+    # TODO 
+    def _fit_greedy_heuristic(self, X, y, loss=None, lookahead=1, n_jobs=1, predef_features=None, predef_scores=None):
+        """
+        This method implements the greedy search algorithm proposed in the IJAR paper (TODO rework citation)
+
+        :param X: _description_
+        :param y: _description_
+        :param lookahead: _description_, defaults to 1
+        :param n_jobs: _description_, defaults to 1
+        :param predef_features: _description_, defaults to None
+        :param predef_scores: _description_, defaults to None
+        """
+        # TODO check how to do binarization
+        initial_clf = _ClassifierAtK(features=(), scores=())
+        initial_psl = ProbabilisticScoringList()
+        complexity_heap = []
+
+
+        pass
+        
+    def _create_nodes(self, remaining_features, score_set, complexity_heap, psl, stage_clf, max_complexity_increase=1):
+        for feature in remaining_features:
+            for score in score_set:
+                features = stage_clf.features + [feature]
+                scores = stage_clf.scores + [score]
+                #TODO check how to do binarization
+                clf = _ClassifierAtK(features=features, scores=scores)
+                #TODO are the individual cascades and stage_models correct? indices are wild
+                h_j = psl.stage_clfs[-1]
+                if self._complexity(clf) - self._complexity(h_j) < max_complexity_increase:
+                    heapq.heappush(complexity_heap, (self._complexity(clf)), (psl, clf))
+        pass
+
+    def _complexity(self, stage_clf):
+        """_summary_
+
+        :param stage_clf: Classifier to compute complexity of
+        :return: Complexity of classifier
+        """
+        return len(stage_clf.features)
 
     def predict(self, X, k=-1):
         """
