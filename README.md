@@ -1,3 +1,6 @@
+# This repository has moved to [trr318/scikit-psl](https://github.com/trr318/scikit-psl)
+
+
 [![License](https://img.shields.io/github/license/stheid/scikit-psl)](https://github.com/stheid/scikit-psl/blob/master/LICENSE)
 [![Pip](https://img.shields.io/pypi/v/scikit-psl)](https://pypi.org/project/scikit-psl)
 [![Paper](https://img.shields.io/badge/doi-10.1007%2F978--3--031--45275--8__13-green)](https://doi.org/10.1007/978-3-031-45275-8_13)
