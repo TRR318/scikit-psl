@@ -14,17 +14,18 @@ from sklearn.metrics import brier_score_loss
 from skpsl.helper import create_optimizer
 import heapq
 
+
 class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     """
     Internal class for the classifier at stage k of the probabilistic scoring list
     """
 
     def __init__(
-            self,
-            features: tuple[int],
-            scores: tuple[int],
-            initial_thresholds: tuple[Optional[float]],
-            threshold_optimizer: callable
+        self,
+        features: tuple[int],
+        scores: tuple[int],
+        initial_thresholds: tuple[Optional[float]],
+        threshold_optimizer: callable,
     ):
         """
 
@@ -47,19 +48,26 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
             feature_values = X[:, f]
             is_data_binary = set(np.unique(feature_values).astype(int)) <= {0, 1}
             if t is np.nan and not is_data_binary:
-                self.logger.debug(f"feature {f} is non-binary and threshold not set: calculating threshold...")
+                self.logger.debug(
+                    f"feature {f} is non-binary and threshold not set: calculating threshold..."
+                )
                 # fit optimal threshold
                 self.thresholds[i] = self.threshold_optimizer(
-                    lambda t_, _: self._expected_entropy(self._compute_total_scores(
-                        X=X,
-                        features=self.features[: i + 1],
-                        scores=self.scores_vec[: i + 1],
-                        thresholds=self.thresholds[:i] + [t_]), y
+                    lambda t_, _: self._expected_entropy(
+                        self._compute_total_scores(
+                            X=X,
+                            features=self.features[: i + 1],
+                            scores=self.scores_vec[: i + 1],
+                            thresholds=self.thresholds[:i] + [t_],
+                        ),
+                        y,
                     ),
                     feature_values,
                 )
 
-        total_scores = self._compute_total_scores(X, self.features, self.scores_vec, self.thresholds)
+        total_scores = self._compute_total_scores(
+            X, self.features, self.scores_vec, self.thresholds
+        )
 
         # compute probabilities
         self.calibrator = IsotonicRegression(
@@ -81,7 +89,9 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         if self.calibrator is None:
             raise NotFittedError()
         proba_true = self.calibrator.transform(
-            self._compute_total_scores(X, self.features, self.scores_vec, self.thresholds)
+            self._compute_total_scores(
+                X, self.features, self.scores_vec, self.thresholds
+            )
         )
         proba = np.vstack([1 - proba_true, proba_true]).T
         return proba
@@ -150,9 +160,13 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.stage_clfs = []  # type: list[_ClassifierAtK]
 
     def fit(
-            self, X, y, lookahead=1, n_jobs=1,
-            predef_features: Optional[np.ndarray] = None,
-            predef_scores: Optional[np.ndarray] = None
+        self,
+        X,
+        y,
+        lookahead=1,
+        n_jobs=1,
+        predef_features: Optional[np.ndarray] = None,
+        predef_scores: Optional[np.ndarray] = None,
     ) -> "ProbabilisticScoringList":
         """
         Fits a probabilistic scoring list to the given data
@@ -194,9 +208,10 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 else [predef_scores[stage - 1]]
             )
 
-            entropies, f, s, t = zip(
+            global_losses, f, s, t = zip(
                 *Parallel(n_jobs=n_jobs)(
                     delayed(self._optimize)(
+                        self.stage_clfs,
                         self.features,
                         f_seq,
                         self.scores,
@@ -205,6 +220,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                         self._thresh_optimizer,
                         X,
                         y,
+                        self._complexity_weighted_loss,
                     )
                     for (f_seq, s_seq) in product(
                         self._gen_lookahead(features_to_consider, lookahead),
@@ -219,7 +235,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 )
             )
 
-            i = np.argmin(entropies)
+            i = np.argmin(global_losses)
             remaining_features.remove(f[i])
 
             expected_entropy = self._fit_and_store_clf_at_k(
@@ -230,40 +246,20 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 self.thresholds + [t[i]],
             )
         return self
-    
 
-    # TODO 
-    def _fit_greedy_heuristic(self, X, y, loss=None, lookahead=1, n_jobs=1, predef_features=None, predef_scores=None):
+    def _final_loss(self, cascade, X, y):
         """
-        This method implements the greedy search algorithm proposed in the IJAR paper (TODO rework citation)
-
-        :param X: _description_
-        :param y: _description_
-        :param lookahead: _description_, defaults to 1
-        :param n_jobs: _description_, defaults to 1
-        :param predef_features: _description_, defaults to None
-        :param predef_scores: _description_, defaults to None
+        A simple global loss function for a cascade that evaluates the cascade in terms of the score of its last classifier
         """
-        # TODO check how to do binarization
-        initial_clf = _ClassifierAtK(features=(), scores=())
-        initial_psl = ProbabilisticScoringList()
-        complexity_heap = []
+        return cascade[-1].score(X, y)
 
-
-        pass
-        
-    def _create_nodes(self, remaining_features, score_set, complexity_heap, psl, stage_clf, max_complexity_increase=1):
-        for feature in remaining_features:
-            for score in score_set:
-                features = stage_clf.features + [feature]
-                scores = stage_clf.scores + [score]
-                #TODO check how to do binarization
-                clf = _ClassifierAtK(features=features, scores=scores)
-                #TODO are the individual cascades and stage_models correct? indices are wild
-                h_j = psl.stage_clfs[-1]
-                if self._complexity(clf) - self._complexity(h_j) < max_complexity_increase:
-                    heapq.heappush(complexity_heap, (self._complexity(clf)), (psl, clf))
-        pass
+    def _complexity_weighted_loss(self, cascade, X, y):
+        """
+        A global loss function that computes the average score weighted by their individual complexities
+        """
+        local_losses = [h.score(X, y) for h in cascade]
+        complexities = [self._complexity(h) for h in cascade]
+        return np.mean(local_losses)
 
     def _complexity(self, stage_clf):
         """_summary_
@@ -376,23 +372,47 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
     def _fit_and_store_clf_at_k(self, X, y, f=None, s=None, t=None):
         f, s, t = f or [], s or [], t or []
-        k_clf = _ClassifierAtK(features=f, scores=s, initial_thresholds=t,
-                               threshold_optimizer=self._thresh_optimizer).fit(X, y)
+        k_clf = _ClassifierAtK(
+            features=f,
+            scores=s,
+            initial_thresholds=t,
+            threshold_optimizer=self._thresh_optimizer,
+        ).fit(X, y)
         self.stage_clfs.append(k_clf)
         return k_clf.score(X)
 
     @staticmethod
     def _optimize(
-            features, feature_extension, scores, score_extension, thresholds, optimizer, X, y
+        current_cascade,
+        features,
+        feature_extension,
+        scores,
+        score_extension,
+        thresholds,
+        optimizer,
+        X,
+        y,
+        global_loss,
     ):
-        clf = _ClassifierAtK(
-            features=features + feature_extension,
-            scores=scores + score_extension,
-            initial_thresholds=thresholds + [np.nan] * len(feature_extension),
-            threshold_optimizer=optimizer
-        ).fit(X, y)
+        candidate_cascade_extension = []
+
+        for i in range(1, len(feature_extension) + 1):
+            clf = _ClassifierAtK(
+                features=features + feature_extension,
+                scores=scores + score_extension,
+                initial_thresholds=thresholds + [np.nan] * len(feature_extension),
+                threshold_optimizer=optimizer,
+            ).fit(X, y)
+
+            if i == 1:
+                one_step_classifier = clf
+            candidate_cascade_extension.append(clf)
+
+        candidate_cascade = current_cascade + candidate_cascade_extension
+        candidate_loss = global_loss(candidate_cascade, X, y)
+
         return (
-            clf.score(X),
+            candidate_loss,
             feature_extension[0],
             score_extension[0],
             clf.thresholds[len(features)],
@@ -409,6 +429,8 @@ if __name__ == "__main__":
 
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
-
-    clf_ = ProbabilisticScoringList({-1, 1, 2})
-    print("Brier score:", cross_val_score(clf_, X_, y_, cv=5).mean())
+    thresh_optimizer = create_optimizer("bisect")
+    clf = ProbabilisticScoringList(score_set={1, 2, 3})
+    clf.fit(X_, y_, lookahead=2)
+    print(clf.score(X_, y_))
+    # print("Brier score:", cross_val_score(clf_, X_, y_, cv=5).mean())
