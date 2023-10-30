@@ -5,7 +5,7 @@ description = "Probabilistic Scoring List classifier"
 license = "MIT"
 authors = ["Stefan Heid <stefan.heid@upb.de>", "Jonas Hanselle <jonas.hanselle@ifi.lmu.de>"]
 readme = ["README.md", "CHANGELOG.md"]
-repository = "https://github.com/stheid/scikit-psl"
+repository = "https://github.com/trr318/scikit-psl"
 packages = [{ include = "skpsl" }]
 
 [tool.poetry.dependencies]
