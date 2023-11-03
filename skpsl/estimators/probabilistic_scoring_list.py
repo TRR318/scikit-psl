@@ -5,7 +5,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from scipy.stats import entropy
+from scipy.stats import entropy, hmean
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
@@ -165,6 +165,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         y,
         lookahead=1,
         n_jobs=1,
+        cascade_loss="final_loss",
         predef_features: Optional[np.ndarray] = None,
         predef_scores: Optional[np.ndarray] = None,
     ) -> "ProbabilisticScoringList":
@@ -179,6 +180,11 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param predef_scores:
         :return: The fitted classifier
         """
+
+        if cascade_loss == "final_loss":
+            global_loss = self._final_loss
+        else:
+            global_loss = self._complexity_weighted_harmonic_loss
 
         number_features = X.shape[1]
         remaining_features = list(range(number_features))
@@ -220,7 +226,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                         self._thresh_optimizer,
                         X,
                         y,
-                        self._complexity_weighted_loss,
+                        global_loss,
                     )
                     for (f_seq, s_seq) in product(
                         self._gen_lookahead(features_to_consider, lookahead),
@@ -253,13 +259,13 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         """
         return cascade[-1].score(X, y)
 
-    def _complexity_weighted_loss(self, cascade, X, y):
+    def _complexity_weighted_harmonic_loss(self, cascade, X, y, eps=0):
         """
         A global loss function that computes the average score weighted by their individual complexities
         """
-        local_losses = [h.score(X, y) for h in cascade]
+        local_losses = 1 - np.array([h.score(X, y) for h in cascade])
         complexities = [self._complexity(h) for h in cascade]
-        return np.mean(local_losses)
+        return 1 - hmean(local_losses, weights=complexities)
 
     def _complexity(self, stage_clf):
         """_summary_
@@ -302,7 +308,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param sample_weight: ignored
         :return:
         """
-        return brier_score_loss(y, self.predict_proba(X, k=k)[:, 1])
+        # return brier_score_loss(y, self.predict_proba(X, k=k)[:, 1])
+        return self._complexity_weighted_harmonic_loss(self.stage_clfs, X, y)
 
     def inspect(self, k=None, feature_names=None) -> pd.DataFrame:
         """
@@ -398,14 +405,11 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         for i in range(1, len(feature_extension) + 1):
             clf = _ClassifierAtK(
-                features=features + feature_extension,
-                scores=scores + score_extension,
-                initial_thresholds=thresholds + [np.nan] * len(feature_extension),
+                features=features + feature_extension[:i],
+                scores=scores + score_extension[:i],
+                initial_thresholds=thresholds + [np.nan] * i,
                 threshold_optimizer=optimizer,
             ).fit(X, y)
-
-            if i == 1:
-                one_step_classifier = clf
             candidate_cascade_extension.append(clf)
 
         candidate_cascade = current_cascade + candidate_cascade_extension
@@ -431,6 +435,8 @@ if __name__ == "__main__":
     X_, y_ = make_classification(random_state=42)
     thresh_optimizer = create_optimizer("bisect")
     clf = ProbabilisticScoringList(score_set={1, 2, 3})
+    clf.fit(X_, y_, lookahead=1)
+    print("lookahead 1 loss:", clf.score(X_, y_))
     clf.fit(X_, y_, lookahead=2)
-    print(clf.score(X_, y_))
+    print("lookahead 2 loss:", clf.score(X_, y_))
     # print("Brier score:", cross_val_score(clf_, X_, y_, cv=5).mean())
