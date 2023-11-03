@@ -98,7 +98,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
             raise NotFittedError()
         if not self.features:
             p_pos = self.calibrator.transform([[0]])
-            return entropy([p_pos, 1 - p_pos]).item()
+            return entropy([p_pos, 1 - p_pos], base=2).item()
         total_scores = self._compute_total_scores(X, self.features, self.scores_vec, self.thresholds)
         return self._expected_entropy(total_scores, calibrator=self.calibrator)
 
