@@ -1,5 +1,5 @@
 import logging
-from itertools import combinations, product, repeat
+from itertools import product, repeat, permutations
 from typing import Optional
 
 import numpy as np
@@ -424,7 +424,14 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
     @staticmethod
     def _gen_lookahead(list_, lookahead):
-        return combinations(list_, min(lookahead, len(list_)))
+        # generate sequences of shortening lookaheads (because combinations returns empty list if len(list) < l)
+        combination_seqs = (
+            [list(tup) for tup in combinations(list_, _l)]
+            for _l in range(lookahead, 0, -1)
+        )
+        # get first non-empty sequence
+        seqs = next((seq for seq in combination_seqs if seq))
+        return seqs
 
 
 if __name__ == "__main__":
