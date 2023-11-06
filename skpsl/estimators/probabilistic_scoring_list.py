@@ -264,7 +264,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         A global loss function that computes the average score weighted by their individual complexities
         """
         local_losses = 1 - np.array([h.score(X, y) for h in cascade])
-        complexities = [self._complexity(h) for h in cascade]
+        complexities = [self._complexity(h) + 1 for h in cascade]
         return 1 - hmean(local_losses, weights=complexities)
 
     def _complexity(self, stage_clf):
