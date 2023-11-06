@@ -405,8 +405,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         for i in range(1, len(feature_extension) + 1):
             clf = _ClassifierAtK(
-                features=features + feature_extension[:i],
-                scores=scores + score_extension[:i],
+                features= list(features)  + list(feature_extension[:i]),
+                scores= list(scores) + list(score_extension[:i]),
                 initial_thresholds=thresholds + [np.nan] * i,
                 threshold_optimizer=optimizer,
             ).fit(X, y)
