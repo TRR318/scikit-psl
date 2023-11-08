@@ -252,7 +252,6 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             )
         return self
 
-
     def _final_model_cascade_loss(self, cascade, X, y, local_loss=None):
         """
         A simple global loss function for a cascade that evaluates the cascade in terms of the score of its last classifier
@@ -262,13 +261,15 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             return local_loss(y, y_pred)
         return cascade[-1].score(X, y)
 
-    def _complexity_weighted_harmonic_cascade_loss(self,cascade, X, y, eps=0, local_loss=None):
+    def _complexity_weighted_harmonic_cascade_loss(
+        self, cascade, X, y, eps=0, local_loss=None
+    ):
         """
         A global loss function that computes the harmonic mean of the scores of the models in the cascade weighted by their respective complexities
         """
         if local_loss:
-            local_losses = 1 - np.array([local_loss(y,h.predict(X)) for h in cascade])
-        else :
+            local_losses = 1 - np.array([local_loss(y, h.predict(X)) for h in cascade])
+        else:
             local_losses = 1 - np.array([h.score(X, y) for h in cascade])
         complexities = [self._complexity(h) + 1 for h in cascade]
         return 1 - hmean(local_losses, weights=complexities)
@@ -411,8 +412,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         for i in range(1, len(feature_extension) + 1):
             clf = _ClassifierAtK(
-                features= list(features)  + list(feature_extension[:i]),
-                scores= list(scores) + list(score_extension[:i]),
+                features=list(features) + list(feature_extension[:i]),
+                scores=list(scores) + list(score_extension[:i]),
                 initial_thresholds=thresholds + [np.nan] * i,
                 threshold_optimizer=optimizer,
             ).fit(X, y)
@@ -431,13 +432,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     @staticmethod
     def _gen_lookahead(list_, lookahead):
         # generate sequences of shortening lookaheads (because combinations returns empty list if len(list) < l)
-        combination_seqs = (
-            [list(tup) for tup in combinations(list_, _l)]
-            for _l in range(lookahead, 0, -1)
-        )
-        # get first non-empty sequence
-        seqs = next((seq for seq in combination_seqs if seq))
-        return seqs
+        return permutations(list_, min(lookahead, len(list_)))
 
 
 if __name__ == "__main__":
