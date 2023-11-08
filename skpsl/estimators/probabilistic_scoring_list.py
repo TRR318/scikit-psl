@@ -268,11 +268,13 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         A global loss function that computes the harmonic mean of the scores of the models in the cascade weighted by their respective complexities
         """
         if local_loss:
-            local_losses = 1 - np.array([local_loss(y, h.predict(X)) for h in cascade])
+            local_performances = -np.array(
+                [local_loss(y, h.predict(X)) for h in cascade]
+            )
         else:
-            local_losses = 1 - np.array([h.score(X, y) for h in cascade])
+            local_performances = -np.array([h.score(X, y) for h in cascade])
         complexities = [self._complexity(h) + 1 for h in cascade]
-        return 1 - hmean(local_losses, weights=complexities)
+        return -hmean(local_performances, weights=complexities)
 
     def _complexity(self, stage_clf):
         """_summary_
