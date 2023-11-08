@@ -12,7 +12,6 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss
 
 from skpsl.helper import create_optimizer
-import heapq
 
 
 class _ClassifierAtK(BaseEstimator, ClassifierMixin):
@@ -253,17 +252,24 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             )
         return self
 
-    def _final_loss(self, cascade, X, y):
+
+    def _final_model_cascade_loss(self, cascade, X, y, local_loss=None):
         """
         A simple global loss function for a cascade that evaluates the cascade in terms of the score of its last classifier
         """
+        if local_loss:
+            y_pred = cascade[-1].predict(X)
+            return local_loss(y, y_pred)
         return cascade[-1].score(X, y)
 
-    def _complexity_weighted_harmonic_loss(self, cascade, X, y, eps=0):
+    def _complexity_weighted_harmonic_cascade_loss(self,cascade, X, y, eps=0, local_loss=None):
         """
-        A global loss function that computes the average score weighted by their individual complexities
+        A global loss function that computes the harmonic mean of the scores of the models in the cascade weighted by their respective complexities
         """
-        local_losses = 1 - np.array([h.score(X, y) for h in cascade])
+        if local_loss:
+            local_losses = 1 - np.array([local_loss(y,h.predict(X)) for h in cascade])
+        else :
+            local_losses = 1 - np.array([h.score(X, y) for h in cascade])
         complexities = [self._complexity(h) + 1 for h in cascade]
         return 1 - hmean(local_losses, weights=complexities)
 
