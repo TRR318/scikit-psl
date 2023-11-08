@@ -272,7 +272,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 [local_loss(y, h.predict(X)) for h in cascade]
             )
         else:
-            local_performances = -np.array([h.score(X, y) for h in cascade])
+            local_performances = 1 - np.array([h.score(X, y) for h in cascade])
         complexities = [self._complexity(h) + 1 for h in cascade]
         return -hmean(local_performances, weights=complexities)
 
