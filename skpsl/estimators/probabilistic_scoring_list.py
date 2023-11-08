@@ -316,7 +316,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :return:
         """
         # return brier_score_loss(y, self.predict_proba(X, k=k)[:, 1])
-        return self._complexity_weighted_harmonic_loss(self.stage_clfs, X, y)
+        return self._complexity_weighted_harmonic_cascade_loss(self.stage_clfs, X, y)
 
     def inspect(self, k=None, feature_names=None) -> pd.DataFrame:
         """
