@@ -183,7 +183,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         if cascade_loss == "final_loss":
             global_loss = self._final_loss
         else:
-            global_loss = self._complexity_weighted_harmonic_loss
+            global_loss = self._complexity_weighted_harmonic_cascade_loss
 
         number_features = X.shape[1]
         remaining_features = list(range(number_features))
