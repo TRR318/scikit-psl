@@ -182,7 +182,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         y,
         lookahead=1,
         n_jobs=1,
-        local_loss=None,
+        local_performance=None,
         maximize=False,
         predef_features: Optional[np.ndarray] = None,
         predef_scores: Optional[np.ndarray] = None,
@@ -199,7 +199,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :return: The fitted classifier
         """
 
-        global_loss = self.global_loss_builder(local_loss)
+        global_loss = self.global_loss_builder(local_performance)
 
         number_features = X.shape[1]
         remaining_features = list(range(number_features))
