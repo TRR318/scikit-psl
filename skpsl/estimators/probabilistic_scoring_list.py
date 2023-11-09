@@ -108,7 +108,9 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         if not self.features:
             p_pos = self.calibrator.transform([[0]])
             return entropy([p_pos, 1 - p_pos], base=2).item()
-        total_scores = self._compute_total_scores(X, self.features, self.scores_vec, self.thresholds)
+        total_scores = self._compute_total_scores(
+            X, self.features, self.scores_vec, self.thresholds
+        )
         return self._expected_entropy(total_scores, calibrator=self.calibrator)
 
     @staticmethod
@@ -158,7 +160,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.sorted_score_set = np.array(sorted(self.score_set, reverse=True, key=abs))
         self.stage_clfs = []  # type: list[_ClassifierAtK]
 
-    def global_loss_builder(self, local_loss=None):
+    def global_loss_builder(self, local_performances=None, maximize=True):
         def _complexity_weighted_harmonic_cascade_loss(self, cascade, X, y, eps=0):
             """
             A global loss function that computes the harmonic mean of the scores of the models in the cascade weighted by their respective complexities
@@ -180,7 +182,6 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         y,
         lookahead=1,
         n_jobs=1,
-        cascade_loss="final_loss",
         local_loss=None,
         maximize=False,
         predef_features: Optional[np.ndarray] = None,
