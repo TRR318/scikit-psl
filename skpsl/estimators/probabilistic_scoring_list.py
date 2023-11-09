@@ -160,14 +160,14 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.sorted_score_set = np.array(sorted(self.score_set, reverse=True, key=abs))
         self.stage_clfs = []  # type: list[_ClassifierAtK]
 
-    def global_loss_builder(self, local_performances=None, maximize=True):
-        def _complexity_weighted_harmonic_cascade_loss(self, cascade, X, y, eps=0):
+    def global_loss_builder(self, local_performance=None, maximize=True):
+        def _complexity_weighted_harmonic_cascade_loss(cascade, X, y, eps=0):
             """
             A global loss function that computes the harmonic mean of the scores of the models in the cascade weighted by their respective complexities
             """
-            if local_loss:
+            if local_performance:
                 local_performances = -np.array(
-                    [local_loss(y, h.predict(X)) for h in cascade]
+                    [local_performance(y, h.predict_proba(X)) for h in cascade]
                 )
             else:
                 local_performances = 1 - np.array([h.score(X, y) for h in cascade])
