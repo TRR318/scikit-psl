@@ -158,6 +158,22 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.sorted_score_set = np.array(sorted(self.score_set, reverse=True, key=abs))
         self.stage_clfs = []  # type: list[_ClassifierAtK]
 
+    def global_loss_builder(self, local_loss=None):
+        def _complexity_weighted_harmonic_cascade_loss(self, cascade, X, y, eps=0):
+            """
+            A global loss function that computes the harmonic mean of the scores of the models in the cascade weighted by their respective complexities
+            """
+            if local_loss:
+                local_performances = -np.array(
+                    [local_loss(y, h.predict(X)) for h in cascade]
+                )
+            else:
+                local_performances = 1 - np.array([h.score(X, y) for h in cascade])
+            complexities = [self._complexity(h) + 1 for h in cascade]
+            return -hmean(local_performances, weights=complexities)
+
+        return _complexity_weighted_harmonic_cascade_loss
+
     def fit(
         self,
         X,
@@ -165,6 +181,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         lookahead=1,
         n_jobs=1,
         cascade_loss="final_loss",
+        local_loss=None,
+        maximize=False,
         predef_features: Optional[np.ndarray] = None,
         predef_scores: Optional[np.ndarray] = None,
     ) -> "ProbabilisticScoringList":
@@ -180,10 +198,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :return: The fitted classifier
         """
 
-        if cascade_loss == "final_loss":
-            global_loss = self._final_loss
-        else:
-            global_loss = self._complexity_weighted_harmonic_cascade_loss
+        global_loss = self.global_loss_builder(local_loss)
 
         number_features = X.shape[1]
         remaining_features = list(range(number_features))
@@ -260,21 +275,6 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             y_pred = cascade[-1].predict(X)
             return local_loss(y, y_pred)
         return cascade[-1].score(X, y)
-
-    def _complexity_weighted_harmonic_cascade_loss(
-        self, cascade, X, y, eps=0, local_loss=None
-    ):
-        """
-        A global loss function that computes the harmonic mean of the scores of the models in the cascade weighted by their respective complexities
-        """
-        if local_loss:
-            local_performances = -np.array(
-                [local_loss(y, h.predict(X)) for h in cascade]
-            )
-        else:
-            local_performances = 1 - np.array([h.score(X, y) for h in cascade])
-        complexities = [self._complexity(h) + 1 for h in cascade]
-        return -hmean(local_performances, weights=complexities)
 
     def _complexity(self, stage_clf):
         """_summary_
