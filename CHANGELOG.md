@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.2 - 2023-11-09
+
+### Fixed
+
+- _ClassifierAtK
+    - Expected entropy for stage 0 now also calculated wrt. base 2
+    - Data with only 0 or 1 is now also interpret as binary data
+
 ## 0.4.1 - 2023-10-19
 
 ### Fixed

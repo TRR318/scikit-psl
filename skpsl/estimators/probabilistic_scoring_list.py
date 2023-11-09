@@ -45,7 +45,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     def fit(self, X, y) -> "_ClassifierAtK":
         for i, (f, t) in enumerate(zip(self.features, self.initial_thresholds)):
             feature_values = X[:, f]
-            is_data_binary = set(np.unique(feature_values).astype(int)) == {0, 1}
+            is_data_binary = set(np.unique(feature_values).astype(int)) <= {0, 1}
             if t is np.nan and not is_data_binary:
                 self.logger.debug(f"feature {f} is non-binary and threshold not set: calculating threshold...")
                 # fit optimal threshold
