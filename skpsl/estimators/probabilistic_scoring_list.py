@@ -200,7 +200,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         """
 
         global_loss = self.global_loss_builder(local_performance)
-        self.cascade_loss = global_loss
+        self._cascade_loss = global_loss
 
         number_features = X.shape[1]
         remaining_features = list(range(number_features))
