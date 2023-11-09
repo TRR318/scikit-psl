@@ -200,6 +200,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         """
 
         global_loss = self.global_loss_builder(local_performance)
+        self.cascade_loss = global_loss
 
         number_features = X.shape[1]
         remaining_features = list(range(number_features))
@@ -319,7 +320,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :return:
         """
         # return brier_score_loss(y, self.predict_proba(X, k=k)[:, 1])
-        return self._complexity_weighted_harmonic_cascade_loss(self.stage_clfs, X, y)
+        return self._cascade_loss(self.stage_clfs, X, y)
 
     def inspect(self, k=None, feature_names=None) -> pd.DataFrame:
         """
