@@ -9,6 +9,7 @@ from scipy.stats import entropy, hmean
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss
 
 from skpsl.helper import create_optimizer
@@ -25,17 +26,20 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         scores: tuple[int],
         initial_thresholds: tuple[Optional[float]],
         threshold_optimizer: callable,
+        calibration_method="isotonic",
     ):
         """
-
         :param features: tuple of feature indices. used for selecting data from X
         :param scores: tuple of scores, corresponding to the feature indices
         :param initial_thresholds: tuple of thresholds to binarize the feature values
+        :param calibration_method: can be "isotonic" or "sigmoid", defines how the score is converted into a probability
         """
         self.features = features
         self.scores = scores
         self.initial_thresholds = initial_thresholds
         self.threshold_optimizer = threshold_optimizer
+        assert calibration_method in {"isotonic", "sigmoid"}
+        self.calibration_method = calibration_method
 
         self.thresholds = list(initial_thresholds)
         self.scores_vec = np.array(scores)
@@ -69,9 +73,13 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         )
 
         # compute probabilities
-        self.calibrator = IsotonicRegression(
-            y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip"
-        )
+        if self.calibration_method == "isotonic":
+            self.calibrator = IsotonicRegression(
+                y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip"
+            )
+        else:
+            self.calibrator = LogisticRegression()
+
         self.calibrator.fit(total_scores, y)
 
         return self
