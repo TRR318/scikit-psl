@@ -167,7 +167,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.score_set = score_set
         self.entropy_threshold = entropy_threshold
         self.method = method
-        self.stage_clf_params = stage_clf_params
+        self.stage_clf_params = stage_clf_params or dict()
 
         self._thresh_optimizer = create_optimizer(method)
         self.logger = logging.getLogger(__name__)
