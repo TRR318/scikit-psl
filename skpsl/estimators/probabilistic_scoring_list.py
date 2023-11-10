@@ -10,7 +10,6 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import brier_score_loss
 
 from skpsl.helper import create_optimizer
 
@@ -153,7 +152,13 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     A probabilistic classifier that greedily creates a PSL selecting one feature at a time
     """
 
-    def __init__(self, score_set: set, entropy_threshold: float = -1, method="bisect"):
+    def __init__(
+        self,
+        score_set: set,
+        entropy_threshold: float = -1,
+        method="bisect",
+        stage_clf_params=None,
+    ):
         """
 
         :param score_set: Set score values to be considered. Basically feature weights.
@@ -162,6 +167,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.score_set = score_set
         self.entropy_threshold = entropy_threshold
         self.method = method
+        self.stage_clf_params = stage_clf_params
 
         self._thresh_optimizer = create_optimizer(method)
         self.logger = logging.getLogger(__name__)
@@ -251,6 +257,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                         X,
                         y,
                         global_loss,
+                        self.stage_clf_params
                     )
                     for (f_seq, s_seq) in product(
                         self._gen_lookahead(features_to_consider, lookahead),
@@ -403,6 +410,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             scores=s,
             initial_thresholds=t,
             threshold_optimizer=self._thresh_optimizer,
+            **self.stage_clf_params
         ).fit(X, y)
         self.stage_clfs.append(k_clf)
         return k_clf.score(X)
@@ -419,6 +427,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         X,
         y,
         global_loss,
+        stage_clf_params,
     ):
         candidate_cascade_extension = []
 
@@ -428,6 +437,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 scores=list(scores) + list(score_extension[:i]),
                 initial_thresholds=thresholds + [np.nan] * i,
                 threshold_optimizer=optimizer,
+                **stage_clf_params,
             ).fit(X, y)
             candidate_cascade_extension.append(clf)
 
@@ -449,7 +459,6 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
 if __name__ == "__main__":
     from sklearn.datasets import make_classification
-    from sklearn.model_selection import cross_val_score
 
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
