@@ -3,7 +3,8 @@ from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.pipeline import Pipeline
 
-from skpsl import ProbabilisticScoringList, MinEntropyBinarizer
+from skpsl import ProbabilisticScoringList
+from skpsl.preprocessing import MinEntropyBinarizer
 
 
 def test_binary_data():
