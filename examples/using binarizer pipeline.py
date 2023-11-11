@@ -2,7 +2,8 @@ from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
-from skpsl import MinEntropyBinarizer, ProbabilisticScoringList
+from skpsl import ProbabilisticScoringList
+from skpsl.preprocessing import MinEntropyBinarizer
 
 if __name__ == '__main__':
     X, y = make_classification(n_informative=10, random_state=42)
