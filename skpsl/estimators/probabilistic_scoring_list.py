@@ -9,7 +9,7 @@ from scipy.stats import entropy
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
-from sklearn.metrics import brier_score_loss
+from sklearn.metrics import brier_score_loss, accuracy_score
 
 from skpsl.helper import create_optimizer
 from skpsl.preprocessing import SigmoidTransformer
@@ -165,6 +165,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         method="bisect",
         lookahead=1,
         n_jobs=None,
+        optimization_metric=None,
         stage_clf_params=None,
     ):
         """
@@ -177,11 +178,19 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.method = method
         self.lookahead = lookahead
         self.n_jobs = n_jobs
+        self.optimization_metric = optimization_metric
         self.stage_clf_params = stage_clf_params
 
         self.stage_clf_params_ex = (self.stage_clf_params or dict()) | dict(
             threshold_optimizer=create_optimizer(method)
         )
+        match optimization_metric:
+            case None:
+                self.stage_loss = lambda clf, X, y: clf.score(X)
+            case _:
+                self.stage_loss = lambda clf, X, y: self.optimization_metric(
+                    y, clf.predict_proba(X)[:, 1]
+                )
         self.logger = logging.getLogger(__name__)
         self.sorted_score_set = np.array(sorted(self.score_set, reverse=True, key=abs))
         self.stage_clfs = []  # type: list[_ClassifierAtK]
@@ -242,6 +251,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                         list(s_seq),
                         self.thresholds,
                         self.stage_clf_params_ex,
+                        self.stage_loss,
                         X,
                         y,
                     )
@@ -380,7 +390,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             **self.stage_clf_params_ex,
         ).fit(X, y)
         self.stage_clfs.append(k_clf)
-        return k_clf.score(X)
+        return self.stage_loss(k_clf, X, y)
 
     @staticmethod
     def _optimize(
@@ -390,6 +400,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         score_extension,
         thresholds,
         additional_params,
+        stage_loss,
         X,
         y,
     ):
@@ -399,8 +410,9 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             initial_thresholds=thresholds + [np.nan] * len(feature_extension),
             **additional_params,
         ).fit(X, y)
+
         return (
-            clf.score(X),
+            stage_loss(clf, X, y),
             feature_extension[0],
             score_extension[0],
             clf.thresholds[len(features)],
