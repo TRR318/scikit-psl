@@ -1,5 +1,5 @@
 import logging
-from itertools import combinations, product, repeat
+from itertools import combinations, product, combinations_with_replacement
 from typing import Optional
 
 import numpy as np
@@ -9,7 +9,7 @@ from scipy.stats import entropy
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
-from sklearn.metrics import brier_score_loss, accuracy_score
+from sklearn.metrics import brier_score_loss
 
 from skpsl.helper import create_optimizer
 from skpsl.preprocessing import SigmoidTransformer
@@ -161,7 +161,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     def __init__(
         self,
         score_set: set,
-        entropy_threshold: float = -1,
+        loss_cutoff: float = None,
         method="bisect",
         lookahead=1,
         n_jobs=None,
@@ -171,10 +171,10 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         """
 
         :param score_set: Set score values to be considered. Basically feature weights.
-        :param entropy_threshold: Shannon Entropy base 2 threshold after which to stop fitting more stages.
+        :param loss_cutoff: minimal loss at which to stop fitting further stages. None means fitting the whole stage
         """
         self.score_set = score_set
-        self.entropy_threshold = entropy_threshold
+        self.loss_cutoff = loss_cutoff
         self.method = method
         self.lookahead = lookahead
         self.n_jobs = n_jobs
@@ -225,9 +225,9 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         stage = 0
 
         # first
-        expected_entropy = self._fit_and_store_clf_at_k(X, y)
+        loss = self._fit_and_store_clf_at_k(X, y)
 
-        while remaining_features and expected_entropy > self.entropy_threshold:
+        while remaining_features and (self.loss_cutoff is None or loss > self.loss_cutoff):
             stage += 1
 
             # noinspection PyUnresolvedReferences
@@ -242,7 +242,9 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 else [predef_scores[stage - 1]]
             )
 
-            entropies, f, s, t = zip(
+            len_ = min(self.lookahead, len(features_to_consider))
+
+            losses, f, s, t = zip(
                 *Parallel(n_jobs=self.n_jobs)(
                     delayed(self._optimize)(
                         self.features,
@@ -256,22 +258,16 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                         y,
                     )
                     for (f_seq, s_seq) in product(
-                        self._gen_lookahead(features_to_consider, self.lookahead),
-                        # cartesian power of scores
-                        product(
-                            *repeat(
-                                scores_to_consider,
-                                min(self.lookahead, len(features_to_consider)),
-                            )
-                        ),
+                        combinations(features_to_consider, len_),
+                        combinations_with_replacement(scores_to_consider, len_),
                     )
                 )
             )
 
-            i = np.argmin(entropies)
+            i = np.argmin(losses)
             remaining_features.remove(f[i])
 
-            expected_entropy = self._fit_and_store_clf_at_k(
+            loss = self._fit_and_store_clf_at_k(
                 X,
                 y,
                 self.features + [f[i]],
@@ -373,6 +369,9 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     def features(self):
         return self.stage_clfs[-1].features if self.stage_clfs else []
 
+    def __len__(self):
+        return len(self.stage_clfs)
+
     @property
     def scores(self):
         return self.stage_clfs[-1].scores if self.stage_clfs else []
@@ -417,10 +416,6 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             score_extension[0],
             clf.thresholds[len(features)],
         )
-
-    @staticmethod
-    def _gen_lookahead(list_, lookahead):
-        return combinations(list_, min(lookahead, len(list_)))
 
 
 if __name__ == "__main__":
