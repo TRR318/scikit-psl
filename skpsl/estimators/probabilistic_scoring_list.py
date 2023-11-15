@@ -257,7 +257,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             len_ = min(self.lookahead, len(features_to_consider))
 
             new_cascade_losses, f, s, t = zip(
-                *Parallel(n_jobs=self.n_jobs, max_nbytes=1)(
+                *Parallel(n_jobs=self.n_jobs)(
                     delayed(self._optimize)(
                         list(f_seq),
                         list(s_seq),
@@ -447,6 +447,5 @@ if __name__ == "__main__":
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
 
-    clf_ = ProbabilisticScoringList({-1, 1, 2}, n_jobs=2,
-                                    loss_aggregator=lambda x: x[-1])
-    print("Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
+    clf_ = ProbabilisticScoringList({-1, 1, 2})
+    print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
