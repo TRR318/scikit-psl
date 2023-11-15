@@ -1,5 +1,5 @@
 import logging
-from itertools import combinations, product, combinations_with_replacement
+from itertools import permutations, product, combinations_with_replacement
 from typing import Optional
 
 import numpy as np
@@ -22,9 +22,9 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
     def __init__(
         self,
-        features: tuple[int],
-        scores: tuple[int],
-        initial_thresholds: tuple[Optional[float]],
+        features: list[int],
+        scores: list[int],
+        initial_thresholds: list[Optional[float]],
         threshold_optimizer: callable,
         calibration_method="isotonic",
     ):
@@ -49,7 +49,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         for i, (f, t) in enumerate(zip(self.features, self.initial_thresholds)):
             feature_values = X[:, f]
             is_data_binary = set(np.unique(feature_values).astype(int)) <= {0, 1}
-            if t is np.nan and not is_data_binary:
+            if (t is np.nan or t is None) and not is_data_binary:
                 self.logger.debug(
                     f"feature {f} is non-binary and threshold not set: calculating threshold..."
                 )
@@ -130,7 +130,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         if not features:
             return np.zeros((X.shape[0], 1))
         data = np.array(X)[:, features]
-        thresholds = np.array(thresholds)
+        thresholds = np.array(thresholds, dtype=float)
         thresholds[np.isnan(thresholds)] = 0.5
         return ((data > thresholds[None, :]) @ scores).reshape(-1, 1)
 
@@ -165,7 +165,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         method="bisect",
         lookahead=1,
         n_jobs=None,
-        optimization_metric=None,
+        local_loss=None,
+        loss_aggregator=None,
         stage_clf_params=None,
     ):
         """
@@ -178,19 +179,28 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.method = method
         self.lookahead = lookahead
         self.n_jobs = n_jobs
-        self.optimization_metric = optimization_metric
+        self.local_loss = local_loss
+        self.loss_aggregator = loss_aggregator
         self.stage_clf_params = stage_clf_params
 
         self.stage_clf_params_ex = (self.stage_clf_params or dict()) | dict(
             threshold_optimizer=create_optimizer(method)
         )
-        match optimization_metric:
+        match local_loss:
             case None:
                 self.stage_loss = lambda clf, X, y: clf.score(X)
             case _:
-                self.stage_loss = lambda clf, X, y: self.optimization_metric(
+                self.stage_loss = lambda clf, X, y: self.local_loss(
                     y, clf.predict_proba(X)[:, 1]
                 )
+        match loss_aggregator:
+            case None:
+                self.cascade_loss = (
+                    lambda losses: sum(losses)
+                    + np.minimum(np.array(losses)[1:] - np.array(losses)[:-1], 0).sum()
+                )
+            case _:
+                self.cascade_loss = loss_aggregator
         self.logger = logging.getLogger(__name__)
         self.sorted_score_set = np.array(sorted(self.score_set, reverse=True, key=abs))
         self.stage_clfs = []  # type: list[_ClassifierAtK]
@@ -225,9 +235,11 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         stage = 0
 
         # first
-        loss = self._fit_and_store_clf_at_k(X, y)
+        losses = [self._fit_and_store_clf_at_k(X, y)]
 
-        while remaining_features and (self.loss_cutoff is None or loss > self.loss_cutoff):
+        while remaining_features and (
+            self.loss_cutoff is None or losses[-1] > self.loss_cutoff
+        ):
             stage += 1
 
             # noinspection PyUnresolvedReferences
@@ -244,37 +256,86 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
             len_ = min(self.lookahead, len(features_to_consider))
 
-            losses, f, s, t = zip(
-                *Parallel(n_jobs=self.n_jobs)(
+
+            new_cascade_losses, f, s, t = zip(
+                *Parallel(n_jobs=self.n_jobs, max_nbytes=None)(
                     delayed(self._optimize)(
                         self.features,
-                        f_seq,
+                        list(f_seq),
                         self.scores,
                         list(s_seq),
                         self.thresholds,
                         self.stage_clf_params_ex,
                         self.stage_loss,
+                        self.cascade_loss,
+                        losses,
                         X,
                         y,
                     )
                     for (f_seq, s_seq) in product(
-                        combinations(features_to_consider, len_),
+                        permutations(features_to_consider, len_),
                         combinations_with_replacement(scores_to_consider, len_),
                     )
                 )
             )
 
-            i = np.argmin(losses)
+            i = np.argmin(new_cascade_losses)
             remaining_features.remove(f[i])
 
-            loss = self._fit_and_store_clf_at_k(
-                X,
-                y,
-                self.features + [f[i]],
-                self.scores + [s[i]],
-                self.thresholds + [t[i]],
+            losses.append(
+                self._fit_and_store_clf_at_k(
+                    X,
+                    y,
+                    self.features + [f[i]],
+                    self.scores + [s[i]],
+                    self.thresholds + [t[i]],
+                )
             )
         return self
+
+    def _fit_and_store_clf_at_k(self, X, y, f=None, s=None, t=None):
+        f, s, t = f or [], s or [], t or []
+        k_clf = _ClassifierAtK(
+            features=f,
+            scores=s,
+            initial_thresholds=t,
+            **self.stage_clf_params_ex,
+        ).fit(X, y)
+        self.stage_clfs.append(k_clf)
+        return self.stage_loss(k_clf, X, y)
+
+    @staticmethod
+    def _optimize(
+        features,
+        feature_extension,
+        scores,
+        score_extension,
+        thresholds,
+        additional_params,
+        stage_loss,
+        cascade_loss,
+        cascade_losses,
+        X,
+        y,
+    ):
+        # build cascade extension
+        new_threshold = None
+        for i in range(1, len(feature_extension) + 1):
+            clf = _ClassifierAtK(
+                features=features + feature_extension,
+                scores=scores + score_extension,
+                initial_thresholds=thresholds + [None] * len(feature_extension),
+                **additional_params,
+            ).fit(X, y)
+            cascade_losses.append(stage_loss(clf, X, y))
+
+
+        return (
+            cascade_loss(cascade_losses),
+            feature_extension[0],
+            score_extension[0],
+            clf.thresholds[len(features)],
+        )
 
     def predict(self, X, k=-1):
         """
@@ -293,14 +354,14 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param k: Classifier stage to use for prediction
         :return:
         """
-        if not self.stage_clfs:
+        if self.stage_clfs is None:
             raise NotFittedError(
                 "Please fit the probabilistic scoring classifier before usage."
             )
 
         return self.stage_clfs[k].predict_proba(X)
 
-    def score(self, X, y, k=-1, sample_weight=None):
+    def score(self, X, y, k=None, sample_weight=None):
         """
         Calculates the Brier score of the model
         :param X:
@@ -309,6 +370,15 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param sample_weight: ignored
         :return:
         """
+        if self.stage_clfs is None:
+            raise NotFittedError()
+        if k is None:
+            return self.cascade_loss(
+                [
+                    brier_score_loss(y, self.predict_proba(X, k=k)[:, 1])
+                    for k in range(len(self))
+                ]
+            )
         return brier_score_loss(y, self.predict_proba(X, k=k)[:, 1])
 
     def inspect(self, k=None, feature_names=None) -> pd.DataFrame:
@@ -319,7 +389,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param feature_names: names of the features.
         :return:
         """
-        k = k or len(self.stage_clfs) - 1
+        k = k or len(self) - 1
 
         scores = self.stage_clfs[k].scores
         features = self.stage_clfs[k].features
@@ -365,57 +435,22 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             )
         return df.reset_index(names=["Stage"])
 
-    @property
-    def features(self):
-        return self.stage_clfs[-1].features if self.stage_clfs else []
-
     def __len__(self):
+        if self.stage_clfs is None:
+            return 0
         return len(self.stage_clfs)
 
     @property
-    def scores(self):
+    def features(self) -> list[int]:
+        return self.stage_clfs[-1].features if self.stage_clfs else []
+
+    @property
+    def scores(self) -> list[int]:
         return self.stage_clfs[-1].scores if self.stage_clfs else []
 
     @property
-    def thresholds(self):
+    def thresholds(self) -> list[int]:
         return self.stage_clfs[-1].thresholds if self.stage_clfs else []
-
-    def _fit_and_store_clf_at_k(self, X, y, f=None, s=None, t=None):
-        f, s, t = f or [], s or [], t or []
-        k_clf = _ClassifierAtK(
-            features=f,
-            scores=s,
-            initial_thresholds=t,
-            **self.stage_clf_params_ex,
-        ).fit(X, y)
-        self.stage_clfs.append(k_clf)
-        return self.stage_loss(k_clf, X, y)
-
-    @staticmethod
-    def _optimize(
-        features,
-        feature_extension,
-        scores,
-        score_extension,
-        thresholds,
-        additional_params,
-        stage_loss,
-        X,
-        y,
-    ):
-        clf = _ClassifierAtK(
-            features=features + list(feature_extension),
-            scores=scores + list(score_extension),
-            initial_thresholds=thresholds + [np.nan] * len(feature_extension),
-            **additional_params,
-        ).fit(X, y)
-
-        return (
-            stage_loss(clf, X, y),
-            feature_extension[0],
-            score_extension[0],
-            clf.thresholds[len(features)],
-        )
 
 
 if __name__ == "__main__":
@@ -425,5 +460,5 @@ if __name__ == "__main__":
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
 
-    clf_ = ProbabilisticScoringList({-1, 1, 2})
-    print("Brier score:", cross_val_score(clf_, X_, y_, cv=5).mean())
+    clf_ = ProbabilisticScoringList({-1, 1, 2}, loss_aggregator=lambda x:x[-1])
+    print("Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
