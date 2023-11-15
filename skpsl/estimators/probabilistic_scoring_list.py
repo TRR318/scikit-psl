@@ -256,18 +256,11 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
             len_ = min(self.lookahead, len(features_to_consider))
 
-
             new_cascade_losses, f, s, t = zip(
-                *Parallel(n_jobs=self.n_jobs, max_nbytes=None)(
+                *Parallel(n_jobs=self.n_jobs, max_nbytes=1)(
                     delayed(self._optimize)(
-                        self.features,
                         list(f_seq),
-                        self.scores,
                         list(s_seq),
-                        self.thresholds,
-                        self.stage_clf_params_ex,
-                        self.stage_loss,
-                        self.cascade_loss,
                         losses,
                         X,
                         y,
@@ -304,37 +297,31 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.stage_clfs.append(k_clf)
         return self.stage_loss(k_clf, X, y)
 
-    @staticmethod
     def _optimize(
-        features,
+        self,
         feature_extension,
-        scores,
         score_extension,
-        thresholds,
-        additional_params,
-        stage_loss,
-        cascade_loss,
         cascade_losses,
         X,
         y,
     ):
         # build cascade extension
-        new_threshold = None
+        new_thresholds = []
         for i in range(1, len(feature_extension) + 1):
             clf = _ClassifierAtK(
-                features=features + feature_extension,
-                scores=scores + score_extension,
-                initial_thresholds=thresholds + [None] * len(feature_extension),
-                **additional_params,
+                features=self.features + feature_extension[:i],
+                scores=self.scores + score_extension[:i],
+                initial_thresholds=self.thresholds + new_thresholds + [None],
+                **self.stage_clf_params_ex,
             ).fit(X, y)
-            cascade_losses.append(stage_loss(clf, X, y))
-
+            cascade_losses.append(self.stage_loss(clf, X, y))
+            new_thresholds.append(clf.thresholds[-1])
 
         return (
-            cascade_loss(cascade_losses),
+            self.cascade_loss(cascade_losses),
             feature_extension[0],
             score_extension[0],
-            clf.thresholds[len(features)],
+            new_thresholds[0],
         )
 
     def predict(self, X, k=-1):
@@ -460,5 +447,6 @@ if __name__ == "__main__":
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
 
-    clf_ = ProbabilisticScoringList({-1, 1, 2}, loss_aggregator=lambda x:x[-1])
+    clf_ = ProbabilisticScoringList({-1, 1, 2}, n_jobs=2,
+                                    loss_aggregator=lambda x: x[-1])
     print("Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
