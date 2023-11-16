@@ -53,6 +53,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
                 self.logger.debug(
                     f"feature {f} is non-binary and threshold not set: calculating threshold..."
                 )
+
                 # fit optimal threshold
                 self.thresholds[i] = self.threshold_optimizer(
                     lambda t_, _: self._expected_entropy(
@@ -165,8 +166,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         method="bisect",
         lookahead=1,
         n_jobs=None,
-        local_loss=None,
-        loss_aggregator=None,
+        stage_loss=None,
+        cascade_loss=None,
         stage_clf_params=None,
     ):
         """
@@ -179,30 +180,30 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.method = method
         self.lookahead = lookahead
         self.n_jobs = n_jobs
-        self.local_loss = local_loss
-        self.loss_aggregator = loss_aggregator
+        self.stage_loss = stage_loss
+        self.cascade_loss = cascade_loss
         self.stage_clf_params = stage_clf_params
 
         self.stage_clf_params_ex = (self.stage_clf_params or dict()) | dict(
             threshold_optimizer=create_optimizer(method)
         )
-        match local_loss:
+        match stage_loss:
             case None:
-                self.stage_loss = lambda clf, X, y: clf.score(X)
+                self.stage_loss_ = lambda clf, X, y: clf.score(X)
             case _:
-                self.stage_loss = lambda clf, X, y: self.local_loss(
+                self.stage_loss_ = lambda clf, X, y: self.stage_loss_(
                     y, clf.predict_proba(X)[:, 1]
                 )
-        match loss_aggregator:
+        match cascade_loss:
             case None:
-                self.cascade_loss = (
+                self.cascade_loss_ = (
                     lambda losses: sum(losses)
                     + np.minimum(np.array(losses)[1:] - np.array(losses)[:-1], 0).sum()
                 )
             case _:
-                self.cascade_loss = loss_aggregator
+                self.cascade_loss_ = cascade_loss
         self.logger = logging.getLogger(__name__)
-        self.sorted_score_set = np.array(sorted(self.score_set, reverse=True, key=abs))
+        self.score_set_ = np.array(sorted(self.score_set, reverse=True, key=abs))
         self.stage_clfs = []  # type: list[_ClassifierAtK]
 
     def fit(
@@ -249,9 +250,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 else [predef_features[stage - 1]]
             )
             scores_to_consider = (
-                self.sorted_score_set
-                if predef_scores is None
-                else [predef_scores[stage - 1]]
+                self.score_set_ if predef_scores is None else [predef_scores[stage - 1]]
             )
 
             len_ = min(self.lookahead, len(features_to_consider))
@@ -295,7 +294,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             **self.stage_clf_params_ex,
         ).fit(X, y)
         self.stage_clfs.append(k_clf)
-        return self.stage_loss(k_clf, X, y)
+        return self.stage_loss_(k_clf, X, y)
 
     def _optimize(
         self,
@@ -314,11 +313,11 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 initial_thresholds=self.thresholds + new_thresholds + [None],
                 **self.stage_clf_params_ex,
             ).fit(X, y)
-            cascade_losses.append(self.stage_loss(clf, X, y))
+            cascade_losses.append(self.stage_loss_(clf, X, y))
             new_thresholds.append(clf.thresholds[-1])
 
         return (
-            self.cascade_loss(cascade_losses),
+            self.cascade_loss_(cascade_losses),
             feature_extension[0],
             score_extension[0],
             new_thresholds[0],
@@ -360,7 +359,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         if self.stage_clfs is None:
             raise NotFittedError()
         if k is None:
-            return self.cascade_loss(
+            return self.cascade_loss_(
                 [
                     brier_score_loss(y, self.predict_proba(X, k=k)[:, 1])
                     for k in range(len(self))
