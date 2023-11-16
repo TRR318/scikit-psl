@@ -25,7 +25,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         features: list[int],
         scores: list[int],
         initial_thresholds: list[Optional[float]],
-        threshold_optimizer: callable,
+        threshold_optimizer: Optional[callable] = None,
         calibration_method="isotonic",
     ):
         """
@@ -366,6 +366,12 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         return brier_score_loss(y, self.predict_proba(X, k=k)[:, 1])
 
     def searchspace_analysis(self, X):
+        """
+        Prints some useful information about the search space
+
+        :param X: only used to derive number of features
+        :return: None
+        """
         f, s, l = X.shape[1], len(self.score_set), self.lookahead
 
         # models = calculate number of models at each stage
@@ -373,10 +379,11 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         # calculate lookahead induced subspace
         effective_searchspace = sum(
-            [
-                np.prod(np.array([k_ * s for k_ in range(k, max(k - l, 0), -1)]))
+            (
+                s ** min(l, k)
+                * np.array([k_ + 1 for k_ in range(max(k - l, 0), k)]).prod()
                 for k in range(f, 0, -1)
-            ]
+            )
         )
         print(f"Models to evaluate (ignoring caching): {effective_searchspace:g}")
 

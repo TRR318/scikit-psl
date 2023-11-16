@@ -5,14 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unpubished
+## 0.5.0 - 2023-11-16
 
 ### Added
 
-- Sigmoid calibration additional to isotonic
+- _ClassifierAtK
+    - Sigmoid calibration additional to isotonic
+- PSL classifier
+    - Make optimization loss configurable
+    - Small `searchspace_analyisis(·)` function makes lookahead choice more informed
+
+### Fixed
+
+- Fixed lookahead search space and considering global loss for model-sequence evaluation
 
 ### Changed
 
+- Updated dependencies and added black
 - Moved Binarizer to different module
 - Moved PSL hyperparameters to constructor
 
