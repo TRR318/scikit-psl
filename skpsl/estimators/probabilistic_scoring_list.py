@@ -128,7 +128,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
     @staticmethod
     def _compute_total_scores(X, features, scores: np.ndarray, thresholds):
-        if not features:
+        if len(features) == 0:
             return np.zeros((X.shape[0], 1))
         data = np.array(X)[:, features]
         thresholds = np.array(thresholds, dtype=float)
@@ -184,14 +184,14 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.cascade_loss = cascade_loss
         self.stage_clf_params = stage_clf_params
 
-        self.stage_clf_params_ex = (self.stage_clf_params or dict()) | dict(
+        self.stage_clf_params_ = (self.stage_clf_params or dict()) | dict(
             threshold_optimizer=create_optimizer(method)
         )
         match stage_loss:
             case None:
                 self.stage_loss_ = lambda clf, X, y: clf.score(X)
             case _:
-                self.stage_loss_ = lambda clf, X, y: self.stage_loss_(
+                self.stage_loss_ = lambda clf, X, y: self.stage_loss(
                     y, clf.predict_proba(X)[:, 1]
                 )
         match cascade_loss:
@@ -218,8 +218,6 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         :param X:
         :param y:
-        :param lookahead: steps of look ahead
-        :param n_jobs: passed to joblib for parallelization
         :param predef_features:
         :param predef_scores:
         :return: The fitted classifier
@@ -291,7 +289,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             features=f,
             scores=s,
             initial_thresholds=t,
-            **self.stage_clf_params_ex,
+            **self.stage_clf_params_,
         ).fit(X, y)
         self.stage_clfs.append(k_clf)
         return self.stage_loss_(k_clf, X, y)
@@ -311,7 +309,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 features=self.features + feature_extension[:i],
                 scores=self.scores + score_extension[:i],
                 initial_thresholds=self.thresholds + new_thresholds + [None],
-                **self.stage_clf_params_ex,
+                **self.stage_clf_params_,
             ).fit(X, y)
             cascade_losses.append(self.stage_loss_(clf, X, y))
             new_thresholds.append(clf.thresholds[-1])
@@ -366,6 +364,21 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 ]
             )
         return brier_score_loss(y, self.predict_proba(X, k=k)[:, 1])
+
+    def searchspace_analysis(self, X):
+        f, s, l = X.shape[1], len(self.score_set), self.lookahead
+
+        # models = calculate number of models at each stage
+        print(f"Searchspace size: {(s+1)**f:.2g}")
+
+        # calculate lookahead induced subspace
+        effective_searchspace = sum(
+            [
+                np.prod(np.array([k_ * s for k_ in range(k, max(k - l, 0), -1)]))
+                for k in range(f, 0, -1)
+            ]
+        )
+        print(f"Models to evaluate (ignoring caching): {effective_searchspace:g}")
 
     def inspect(self, k=None, feature_names=None) -> pd.DataFrame:
         """
@@ -447,4 +460,5 @@ if __name__ == "__main__":
     X_, y_ = make_classification(random_state=42)
 
     clf_ = ProbabilisticScoringList({-1, 1, 2})
+    clf_.searchspace_analysis(X_)
     print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
