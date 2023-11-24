@@ -302,6 +302,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         X,
         y,
     ):
+        cascade_losses = cascade_losses.copy()
         # build cascade extension
         new_thresholds = []
         for i in range(1, len(feature_extension) + 1):
