@@ -1,4 +1,5 @@
 import logging
+from functools import lru_cache
 from itertools import permutations, product, combinations_with_replacement
 from typing import Optional
 
@@ -61,15 +62,17 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
                 # fit optimal threshold
                 self.feature_thresholds[i] = self.threshold_optimizer(
-                    lambda t_, _: expected_entropy_loss(self._create_calibrator().fit_transform(
-                        self._compute_total_scores(
-                            X,
-                            self.features[: i + 1],
-                            self.scores_[: i + 1],
-                            self.feature_thresholds[:i] + [t_],
-                        ),
-                        y,
-                    )),
+                    lambda t_, _: expected_entropy_loss(
+                        self._create_calibrator().fit_transform(
+                            self._compute_total_scores(
+                                X,
+                                self.features[: i + 1],
+                                self.scores_[: i + 1],
+                                self.feature_thresholds[:i] + [t_],
+                            ),
+                            y,
+                        )
+                    ),
                     feature_values,
                 )
 
@@ -204,6 +207,21 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :return: The fitted classifier
         """
 
+        is_X_binary = all(
+            set(np.unique(feature_values).astype(int)) <= {0, 1}
+            for feature_values in X.T
+        )
+
+        @lru_cache(maxsize=10000)
+        def eval_model(features, scores) -> float:
+            clf = _ClassifierAtK(
+                features=list(features),
+                scores=list(scores),
+                initial_feature_thresholds=np.full_like(features, 0.5),
+                **self.stage_clf_params_,
+            ).fit(X, y)
+            return self.stage_loss_(clf, X, y)
+
         number_features = X.shape[1]
         remaining_features = list(range(number_features))
 
@@ -239,6 +257,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                         losses,
                         X,
                         y,
+                        eval_model if is_X_binary else None,
                     )
                     for (f_seq, s_seq) in product(
                         permutations(feature_candidates, len_),
@@ -274,25 +293,31 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         return self.stage_loss_(k_clf, X, y)
 
     def _optimize(
-        self,
-        feature_extension,
-        score_extension,
-        cascade_losses,
-        X,
-        y,
+        self, feature_extension, score_extension, cascade_losses, X, y, model_eval=None
     ):
         cascade_losses = cascade_losses.copy()
         # build cascade extension
         new_thresholds = []
         for i in range(1, len(feature_extension) + 1):
-            clf = _ClassifierAtK(
-                features=self.features + feature_extension[:i],
-                scores=self.scores + score_extension[:i],
-                initial_feature_thresholds=self.thresholds + new_thresholds + [None],
-                **self.stage_clf_params_,
-            ).fit(X, y)
-            cascade_losses.append(self.stage_loss_(clf, X, y))
-            new_thresholds.append(clf.feature_thresholds[-1])
+            if model_eval is not None:
+                # this function is only provided if the data is binary and we can ignore threshold fitting
+                loss = model_eval(
+                    tuple(self.features + feature_extension[:i]),
+                    tuple(self.scores + score_extension[:i]),
+                )
+                cascade_losses.append(loss)
+                new_thresholds.append(0.5)
+            else:
+                clf = _ClassifierAtK(
+                    features=self.features + feature_extension[:i],
+                    scores=self.scores + score_extension[:i],
+                    initial_feature_thresholds=self.thresholds
+                    + new_thresholds
+                    + [None],
+                    **self.stage_clf_params_,
+                ).fit(X, y)
+                cascade_losses.append(self.stage_loss_(clf, X, y))
+                new_thresholds.append(clf.feature_thresholds[-1])
 
         return (
             self.cascade_loss_(cascade_losses),
@@ -445,6 +470,7 @@ if __name__ == "__main__":
 
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
+    #X_ = X_ > 0.5
 
     clf_ = ProbabilisticScoringList({-1, 1, 2})
     clf_.searchspace_analysis(X_)
