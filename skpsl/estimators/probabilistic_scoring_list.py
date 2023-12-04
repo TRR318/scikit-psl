@@ -11,7 +11,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss
 
 from skpsl.helper import create_optimizer
-from skpsl.metrics import expected_entropy
+from skpsl.metrics import expected_entropy_loss
 from skpsl.preprocessing import SigmoidTransformer
 
 
@@ -61,17 +61,15 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
                 # fit optimal threshold
                 self.feature_thresholds[i] = self.threshold_optimizer(
-                    lambda t_, _: expected_entropy(
-                        self._create_calibrator().fit_transform(
-                            self._compute_total_scores(
-                                X,
-                                self.features[: i + 1],
-                                self.scores_[: i + 1],
-                                self.feature_thresholds[:i] + [t_],
-                            ),
-                            y,
-                        )
-                    ),
+                    lambda t_, _: expected_entropy_loss(self._create_calibrator().fit_transform(
+                        self._compute_total_scores(
+                            X,
+                            self.features[: i + 1],
+                            self.scores_[: i + 1],
+                            self.feature_thresholds[:i] + [t_],
+                        ),
+                        y,
+                    )),
                     feature_values,
                 )
 
@@ -124,7 +122,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         """
         if self.calibrator is None:
             raise NotFittedError()
-        return expected_entropy(self.predict_proba(X)[:, 1])
+        return expected_entropy_loss(self.predict_proba(X)[:, 1])
 
     @staticmethod
     def _compute_total_scores(X, features, scores: np.ndarray, thresholds):

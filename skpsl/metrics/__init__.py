@@ -1,2 +1,2 @@
-from .expected_entropy import expected_entropy
-from .constrained_precision import constrained_precision
+from .expected_entropy import expected_entropy_loss
+from .constrained_precision import constrained_precision_score
