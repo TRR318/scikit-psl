@@ -2,6 +2,7 @@ import logging
 from collections import defaultdict
 from itertools import permutations, product, combinations_with_replacement, chain
 from typing import Optional
+import inspect
 
 import numpy as np
 import pandas as pd
@@ -135,7 +136,9 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         """
         if self.calibrator is None:
             raise NotFittedError()
-        return expected_entropy_loss(self.predict_proba(X)[:, 1])
+        return expected_entropy_loss(
+            self.predict_proba(X)[:, 1], sample_weight=sample_weight
+        )
 
     @staticmethod
     def _compute_total_scores(X, features, scores: np.ndarray, thresholds):
@@ -183,11 +186,11 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         )
         match stage_loss:
             case None:
-                self.stage_loss_ = lambda clf, X, y: clf.score(X)
-            case _:
-                self.stage_loss_ = lambda clf, X, y: self.stage_loss(
-                    y, clf.predict_proba(X)[:, 1]
+                self.stage_loss_ = lambda clf, X, y, sample_weight: clf.score(
+                    X, sample_weight=sample_weight
                 )
+            case _:
+                self.stage_loss_ = self._create_stage_loss()
         match cascade_loss:
             case None:
                 self.cascade_loss_ = sum
@@ -202,6 +205,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self,
         X,
         y,
+        sample_weight=None,
         predef_features: Optional[np.ndarray] = None,
         predef_scores: Optional[np.ndarray] = None,
         strict=True,
@@ -228,7 +232,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         remaining_features = set(range(number_features))
 
         # Stage 0 classifier
-        losses = [self._fit_and_store_clf_at_k(X, y)]
+        losses = [self._fit_and_store_clf_at_k(X, y, sample_weight)]
         stage = 0
 
         while remaining_features and (
@@ -258,11 +262,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             new_cascade_losses, f, s, t = zip(
                 *Parallel(n_jobs=self.n_jobs)(
                     delayed(self._optimize)(
-                        list(f_seq),
-                        list(s_seq),
-                        losses,
-                        X,
-                        y,
+                        list(f_seq), list(s_seq), losses, X, y, sample_weight
                     )
                     for (f_seq, s_seq) in chain.from_iterable(
                         product([fext], product(*[predef_scores[f] for f in fext]))
@@ -278,6 +278,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 self._fit_and_store_clf_at_k(
                     X,
                     y,
+                    sample_weight,
                     self.features + [f[i]],
                     self.scores + [s[i]],
                     self.thresholds + [t[i]],
@@ -286,7 +287,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             stage += 1
         return self
 
-    def _fit_and_store_clf_at_k(self, X, y, f=None, s=None, t=None):
+    def _fit_and_store_clf_at_k(self, X, y, sample_weight=None, f=None, s=None, t=None):
         f, s, t = f or [], s or [], t or []
         k_clf = _ClassifierAtK(
             features=f,
@@ -295,15 +296,10 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             **self.stage_clf_params_,
         ).fit(X, y)
         self.stage_clfs.append(k_clf)
-        return self.stage_loss_(k_clf, X, y)
+        return self.stage_loss_(k_clf, X, y, sample_weight)
 
     def _optimize(
-        self,
-        feature_extension,
-        score_extension,
-        cascade_losses,
-        X,
-        y,
+        self, feature_extension, score_extension, cascade_losses, X, y, sample_weight
     ):
         cascade_losses = cascade_losses.copy()
         # build cascade extension
@@ -315,7 +311,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 initial_feature_thresholds=self.thresholds + new_thresholds + [None],
                 **self.stage_clf_params_,
             ).fit(X, y)
-            cascade_losses.append(self.stage_loss_(clf, X, y))
+            cascade_losses.append(self.stage_loss_(clf, X, y, sample_weight))
             new_thresholds.append(clf.feature_thresholds[-1])
 
         return (
@@ -461,6 +457,21 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     @property
     def thresholds(self) -> list[int]:
         return self.stage_clfs[-1].feature_thresholds if self.stage_clfs else []
+
+    def _create_stage_loss(self):
+        def _stage_loss(clf, X, y, sample_weight=None):
+            if sample_weight is None:
+                self.stage_loss(y, clf.predict_proba(X)[:, 1])
+            elif sample_weight in inspect.getargspec(self.stage_loss).args:
+                self.stage_loss(
+                    y, clf.predict_proba(X)[:, 1], sample_weight=sample_weight
+                )
+            else:
+                ValueError(
+                    "If you want to use sample weights the stage_loss must also be able to handle sample_weight"
+                )
+
+        return _stage_loss
 
 
 if __name__ == "__main__":

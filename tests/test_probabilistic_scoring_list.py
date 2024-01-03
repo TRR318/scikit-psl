@@ -1,10 +1,16 @@
 import numpy as np
+import pytest
 from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.pipeline import Pipeline
 
 from skpsl import ProbabilisticScoringList
 from skpsl.preprocessing import MinEntropyBinarizer
+
+
+@pytest.fixture
+def numpy_randomness():
+    np.random.seed(0)
 
 
 def test_binary_data():
@@ -73,6 +79,22 @@ def test_only_negative_classes():
     psl = ProbabilisticScoringList({-2, -1, 1, 2})
     psl.fit(X, y)
     assert not np.isnan(psl.stage_clfs[0].score(X))
+
+
+def test_sample_weight():
+    X, y = make_classification(
+        n_samples=10, n_features=6, n_informative=4, random_state=42
+    )
+    psl = ProbabilisticScoringList({-1, 1})
+    weighted = psl.fit(X, y).score(
+        X,
+        y,
+        sample_weight=np.random.exponential(
+            X.shape[0],
+        ),
+    )
+    unweighted = psl.fit(X, y).score(X, y)
+    assert unweighted != weighted
 
 
 def test_predef():
