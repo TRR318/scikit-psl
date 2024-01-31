@@ -36,7 +36,7 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=.2, random_s
 
 psl = ProbabilisticScoringList({-1, 1, 2})
 psl.fit(X_train, y_train)
-print(f"Brier score: {psl.score(X_test, y_test):.4f}")
+print(f"Brier score: {psl.score(X_test, y_test, -1):.4f}")
 """
 Brier score: 0.2438  (lower is better)
 """
