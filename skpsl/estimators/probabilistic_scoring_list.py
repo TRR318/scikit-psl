@@ -32,6 +32,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         balance_class_weights=False,
     ):
         """
+        Regardless of the stage-loss, thresholds are optimized with respect to expected entropy
 
         :param features: tuple of feature indices. used for selecting data from X
         :param scores: tuple of scores, corresponding to the feature indices
@@ -50,7 +51,8 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         self.calibrator = None
         self.decision_threshold = 0.5
 
-    def fit(self, X, y) -> "_ClassifierAtK":
+    def fit(self, X, y, sample_weight=None) -> "_ClassifierAtK":
+        X, y = np.array(X), np.array(y)
         if self.balance_class_weights:
             n = y.size
             n_pos = np.count_nonzero(y == 1)
@@ -70,6 +72,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
                     )
 
                 # fit optimal threshold
+                # Note: The threshold is optimized with the expected entropy, regardless of the stageloss used in the PSL
                 self.feature_thresholds[i] = self.threshold_optimizer(
                     lambda t_, _: expected_entropy_loss(
                         self._create_calibrator().fit_transform(
@@ -80,7 +83,8 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
                                 self.feature_thresholds[:i] + [t_],
                             ),
                             y,
-                        )
+                        ),
+                        sample_weight=sample_weight,
                     ),
                     feature_values,
                 )
@@ -142,6 +146,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
     @staticmethod
     def _compute_total_scores(X, features, scores: np.ndarray, thresholds):
+        X = np.array(X)
         if len(features) == 0:
             return np.zeros((X.shape[0], 1))
         data = np.array(X)[:, features]
@@ -219,6 +224,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param predef_scores:
         :return: The fitted classifier
         """
+        X, y = np.array(X), np.array(y)
         if predef_scores and predef_features:
             assert len(predef_features) <= len(predef_scores)
         else:
@@ -305,6 +311,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         # build cascade extension
         new_thresholds = []
         for i in range(1, len(feature_extension) + 1):
+            # Regardless of the stage-loss, thresholds are optimized with respect to expected entropy
             clf = _ClassifierAtK(
                 features=self.features + feature_extension[:i],
                 scores=self.scores + score_extension[:i],

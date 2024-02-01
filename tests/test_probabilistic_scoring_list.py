@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split, cross_val_score
@@ -95,6 +96,18 @@ def test_sample_weight():
     )
     unweighted = psl.fit(X, y).score(X, y)
     assert unweighted != weighted
+
+
+def test_dataframe():
+    X, y = make_classification(
+        n_samples=10, n_features=6, n_informative=4, random_state=42
+    )
+    X = pd.DataFrame(X)
+    y = pd.Series(y)
+
+    psl = ProbabilisticScoringList({-1, 1})
+    psl.fit(X, y).score(X, y)
+
 
 
 def test_predef():
