@@ -45,6 +45,7 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
         self.calibration_method = calibration_method
         self.balance_class_weights = balance_class_weights
 
+        self.classes_ = None
         self.scores_ = np.array(scores)
         self.feature_thresholds = list(initial_feature_thresholds)
         self.logger = logging.getLogger(__name__)
@@ -53,6 +54,10 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
 
     def fit(self, X, y, sample_weight=None) -> "_ClassifierAtK":
         X, y = np.array(X), np.array(y)
+
+        self.classes_ = np.unique(y)
+        y = np.array(y == self.classes_[1], dtype=int)
+
         if self.balance_class_weights:
             n = y.size
             n_pos = np.count_nonzero(y == 1)
@@ -113,9 +118,9 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
     def predict(self, X):
         if self.calibrator is None:
             raise NotFittedError()
-        return np.array(
-            self.predict_proba(X)[:, 1] > self.decision_threshold, dtype=int
-        )
+        return self.classes_[
+            np.array(self.predict_proba(X)[:, 1] > self.decision_threshold, dtype=int)
+        ]
 
     def predict_proba(self, X):
         """
@@ -203,6 +208,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 self.cascade_loss_ = cascade_loss
         self.logger = logging.getLogger(__name__)
         self.score_set_ = np.array(sorted(self.score_set, reverse=True, key=abs))
+        self.classes_ = None
         assert self.score_set_.size > 0
         self.stage_clfs = []  # type: list[_ClassifierAtK]
 
@@ -227,6 +233,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         X, y = np.array(X), np.array(y)
         predef_features = predef_features or []
         predef_scores = predef_scores or []
+
+        self.classes_ = np.unique(y)
         if predef_scores and predef_features:
             assert len(predef_features) <= len(predef_scores)
 
@@ -452,6 +460,11 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         if self.stage_clfs is None:
             return 0
         return len(self.stage_clfs)
+
+    def __getitem__(self, item):
+        if self.stage_clfs is None:
+            raise AttributeError("Cant get any clf, no clfs fitted")
+        return self.stage_clfs[item]
 
     @property
     def features(self) -> list[int]:
