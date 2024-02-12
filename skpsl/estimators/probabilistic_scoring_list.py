@@ -15,6 +15,7 @@ from sklearn.metrics import brier_score_loss
 from skpsl.helper import create_optimizer
 from skpsl.metrics import expected_entropy_loss
 from skpsl.preprocessing import SigmoidTransformer
+from skpsl.preprocessing.beta_transform import BetaTransformer
 
 
 class _ClassifierAtK(BaseEstimator, ClassifierMixin):
@@ -109,6 +110,8 @@ class _ClassifierAtK(BaseEstimator, ClassifierMixin):
                 )
             case "sigmoid":
                 return SigmoidTransformer()
+            case "beta":
+                return BetaTransformer()
             case _:
                 raise ValueError(
                     f'Calibration method "{self.calibration_method}" doesn\'t exist. '
@@ -501,6 +504,6 @@ if __name__ == "__main__":
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
 
-    clf_ = ProbabilisticScoringList({-1, 1, 2})
+    clf_ = ProbabilisticScoringList({-1, 1, 2}, stage_clf_params=dict(calibration_method="beta"))
     clf_.searchspace_analysis(X_)
     print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
