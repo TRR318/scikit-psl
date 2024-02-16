@@ -1,166 +1,18 @@
 import logging
 from collections import defaultdict
-from itertools import permutations, product, combinations_with_replacement, chain
+from itertools import permutations, product, chain
 from typing import Optional
-import inspect
 
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
-from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss
 
+from skpsl.estimators.probabilistic_scoring_system import ProbabilisticScoringSystem
 from skpsl.helper import create_optimizer
-from skpsl.metrics import expected_entropy_loss
-from skpsl.preprocessing import SigmoidTransformer
-from skpsl.preprocessing.beta_transform import BetaTransformer
-
-
-class _ClassifierAtK(BaseEstimator, ClassifierMixin):
-    """
-    Internal class for the classifier at stage k of the probabilistic scoring list
-    """
-
-    def __init__(
-        self,
-        features: list[int],
-        scores: list[int],
-        initial_feature_thresholds: list[Optional[float]],
-        threshold_optimizer: Optional[callable] = None,
-        calibration_method="isotonic",
-        balance_class_weights=False,
-    ):
-        """
-        Regardless of the stage-loss, thresholds are optimized with respect to expected entropy
-
-        :param features: tuple of feature indices. used for selecting data from X
-        :param scores: tuple of scores, corresponding to the feature indices
-        :param initial_feature_thresholds: tuple of thresholds to binarize the feature values
-        """
-        self.features = features
-        self.scores = scores
-        self.initial_thresholds = initial_feature_thresholds
-        self.threshold_optimizer = threshold_optimizer
-        self.calibration_method = calibration_method
-        self.balance_class_weights = balance_class_weights
-
-        self.classes_ = None
-        self.scores_ = np.array(scores)
-        self.feature_thresholds = list(initial_feature_thresholds)
-        self.logger = logging.getLogger(__name__)
-        self.calibrator = None
-        self.decision_threshold = 0.5
-
-    def fit(self, X, y, sample_weight=None) -> "_ClassifierAtK":
-        X, y = np.array(X), np.array(y)
-
-        self.classes_ = np.unique(y)
-        y = np.array(y == self.classes_[1], dtype=int)
-
-        if self.balance_class_weights:
-            n = y.size
-            n_pos = np.count_nonzero(y == 1)
-            self.decision_threshold = n_pos / n
-
-        for i, (f, t) in enumerate(zip(self.features, self.initial_thresholds)):
-            feature_values = X[:, f]
-            is_data_binary = set(np.unique(feature_values).astype(int)) <= {0, 1}
-            if (t is np.nan or t is None) and not is_data_binary:
-                self.logger.debug(
-                    f"feature {f} is non-binary and threshold not set: calculating threshold..."
-                )
-                if self.threshold_optimizer is None:
-                    raise ValueError(
-                        "threshold_optimizer mustn't be None, when non-binary features with unset "
-                        "thresholds exist."
-                    )
-
-                # fit optimal threshold
-                # Note: The threshold is optimized with the expected entropy, regardless of the stageloss used in the PSL
-                self.feature_thresholds[i] = self.threshold_optimizer(
-                    lambda t_, _: expected_entropy_loss(
-                        self._create_calibrator().fit_transform(
-                            self._compute_total_scores(
-                                X,
-                                self.features[: i + 1],
-                                self.scores_[: i + 1],
-                                self.feature_thresholds[:i] + [t_],
-                            ),
-                            y,
-                        ),
-                        sample_weight=sample_weight,
-                    ),
-                    feature_values,
-                )
-
-        total_scores = _ClassifierAtK._compute_total_scores(
-            X, self.features, self.scores_, self.feature_thresholds
-        )
-        self.calibrator = self._create_calibrator().fit(total_scores, y)
-        return self
-
-    def _create_calibrator(self):
-        # compute probabilities
-        match self.calibration_method:
-            case "isotonic":
-                return IsotonicRegression(
-                    y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip"
-                )
-            case "sigmoid":
-                return SigmoidTransformer()
-            case "beta":
-                return BetaTransformer()
-            case _:
-                raise ValueError(
-                    f'Calibration method "{self.calibration_method}" doesn\'t exist. '
-                    'Did you mean "isotonic" or "sigmoid"'
-                )
-
-    def predict(self, X):
-        if self.calibrator is None:
-            raise NotFittedError()
-        return self.classes_[
-            np.array(self.predict_proba(X)[:, 1] > self.decision_threshold, dtype=int)
-        ]
-
-    def predict_proba(self, X):
-        """
-        Predicts the probability for
-        """
-        if self.calibrator is None:
-            raise NotFittedError()
-        proba_pos = self.calibrator.transform(
-            self._compute_total_scores(
-                X, self.features, self.scores_, self.feature_thresholds
-            )
-        )
-        return np.vstack([1 - proba_pos, proba_pos]).T
-
-    def score(self, X, y=None, sample_weight=None):
-        """
-        Calculates the expected entropy of the fitted model
-        :param X:
-        :param y:
-        :param sample_weight:
-        :return:
-        """
-        if self.calibrator is None:
-            raise NotFittedError()
-        return expected_entropy_loss(
-            self.predict_proba(X)[:, 1], sample_weight=sample_weight
-        )
-
-    @staticmethod
-    def _compute_total_scores(X, features, scores: np.ndarray, thresholds):
-        X = np.array(X)
-        if len(features) == 0:
-            return np.zeros((X.shape[0], 1))
-        data = np.array(X)[:, features]
-        thresholds = np.array(thresholds, dtype=float)
-        thresholds[np.isnan(thresholds)] = 0.5
-        return ((data > thresholds[None, :]) @ scores).reshape(-1, 1)
+from skpsl.metrics import soft_ranking_loss
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
@@ -195,15 +47,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.stage_clf_params = stage_clf_params
 
         self.stage_clf_params_ = (self.stage_clf_params or dict()) | dict(
-            threshold_optimizer=create_optimizer(method)
+            threshold_optimizer=create_optimizer(method), loss_function=self.stage_loss
         )
-        match stage_loss:
-            case None:
-                self.stage_loss_ = lambda clf, X, y, sample_weight: clf.score(
-                    X, sample_weight=sample_weight
-                )
-            case _:
-                self.stage_loss_ = self._create_stage_loss()
         match cascade_loss:
             case None:
                 self.cascade_loss_ = sum
@@ -213,7 +58,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.score_set_ = np.array(sorted(self.score_set, reverse=True, key=abs))
         self.classes_ = None
         assert self.score_set_.size > 0
-        self.stage_clfs = []  # type: list[_ClassifierAtK]
+        self.stage_clfs = []  # type: list[ProbabilisticScoringSystem]
 
     def fit(
         self,
@@ -306,14 +151,14 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
     def _fit_and_store_clf_at_k(self, X, y, sample_weight=None, f=None, s=None, t=None):
         f, s, t = f or [], s or [], t or []
-        k_clf = _ClassifierAtK(
+        k_clf = ProbabilisticScoringSystem(
             features=f,
             scores=s,
             initial_feature_thresholds=t,
             **self.stage_clf_params_,
         ).fit(X, y)
         self.stage_clfs.append(k_clf)
-        return self.stage_loss_(k_clf, X, y, sample_weight)
+        return k_clf.score(X, y, sample_weight)
 
     def _optimize(
         self, feature_extension, score_extension, cascade_losses, X, y, sample_weight
@@ -323,13 +168,13 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         new_thresholds = []
         for i in range(1, len(feature_extension) + 1):
             # Regardless of the stage-loss, thresholds are optimized with respect to expected entropy
-            clf = _ClassifierAtK(
+            clf = ProbabilisticScoringSystem(
                 features=self.features + feature_extension[:i],
                 scores=self.scores + score_extension[:i],
                 initial_feature_thresholds=self.thresholds + new_thresholds + [None],
                 **self.stage_clf_params_,
             ).fit(X, y)
-            cascade_losses.append(self.stage_loss_(clf, X, y, sample_weight))
+            cascade_losses.append(clf.score(X, y, sample_weight))
             new_thresholds.append(clf.feature_thresholds[-1])
 
         return (
@@ -464,7 +309,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             return 0
         return len(self.stage_clfs)
 
-    def __getitem__(self, item):
+    def __getitem__(self, item) -> ProbabilisticScoringSystem:
         if self.stage_clfs is None:
             raise AttributeError("Cant get any clf, no clfs fitted")
         return self.stage_clfs[item]
@@ -481,21 +326,6 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     def thresholds(self) -> list[int]:
         return self.stage_clfs[-1].feature_thresholds if self.stage_clfs else []
 
-    def _create_stage_loss(self):
-        def _stage_loss(clf, X, y, sample_weight=None):
-            if sample_weight is None:
-                self.stage_loss(y, clf.predict_proba(X)[:, 1])
-            elif sample_weight in inspect.getargspec(self.stage_loss).args:
-                self.stage_loss(
-                    y, clf.predict_proba(X)[:, 1], sample_weight=sample_weight
-                )
-            else:
-                ValueError(
-                    "If you want to use sample weights the stage_loss must also be able to handle sample_weight"
-                )
-
-        return _stage_loss
-
 
 if __name__ == "__main__":
     from sklearn.datasets import make_classification
@@ -504,6 +334,6 @@ if __name__ == "__main__":
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
 
-    clf_ = ProbabilisticScoringList({-1, 1, 2}, stage_clf_params=dict(calibration_method="beta"))
+    clf_ = ProbabilisticScoringList({-1, 1, 2}, stage_loss=soft_ranking_loss)
     clf_.searchspace_analysis(X_)
     print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
