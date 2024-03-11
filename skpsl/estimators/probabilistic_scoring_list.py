@@ -444,7 +444,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 0,
                 "Threshold",
                 [np.nan]
-                + [(np.nan if np.isnan(t) else f">{t:.4f}") for t in thresholds],
+                + [(np.nan if np.isnan(t) or t is None else f">{t:.4f}") for t in thresholds],
             )
         return df.reset_index(names=["Stage"])
 
