@@ -225,10 +225,10 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :return: The fitted classifier
         """
         X, y = np.array(X), np.array(y)
+        predef_features = predef_features or []
+        predef_scores = predef_scores or []
         if predef_scores and predef_features:
             assert len(predef_features) <= len(predef_scores)
-        else:
-            predef_features, predef_scores = [], []
 
         predef_scores = defaultdict(lambda: list(self.score_set_)) | {
             predef_features[i]: [s] for i, s in enumerate(predef_scores)
