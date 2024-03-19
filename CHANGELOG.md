@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.0 - 2024-03-27
+
+### Added
+
+- PSL classifier
+    - probability predictions can return confidence intervals
+    - probability calibration using BetaCalibration
+    - stages can now be sliced and iterated (\__getitem\__(), \__iter\__())
+- Metrics
+    - Weighted loss metric
+    - Rank loss metric
+
+### Fixed
+
+- PSL more robust against non-standard class labels like "True"/"False" instead of boolean values
+
 ## 0.6.3 - 2024-03-08
 
 ### Added

@@ -1,2 +1,1 @@
 from .binarizer import MinEntropyBinarizer
-from .sigmoid_transform import SigmoidTransformer

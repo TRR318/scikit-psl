@@ -1,14 +1,15 @@
 import logging
-from typing import Optional
+from collections import defaultdict
+from typing import Optional, Union
 
 import numpy as np
+from scipy.stats import beta
 from sklearn.base import BaseEstimator, ClassifierMixin, TransformerMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
 
 from skpsl.metrics import expected_entropy_loss
-from skpsl.preprocessing import SigmoidTransformer
-from skpsl.preprocessing.beta_transform import BetaTransformer
+from skpsl.helper.calibrators import BetaTransformer, SigmoidTransformer
 
 
 class ProbabilisticScoringSystem(BaseEstimator, ClassifierMixin):
@@ -49,8 +50,8 @@ class ProbabilisticScoringSystem(BaseEstimator, ClassifierMixin):
                     )
                 )
             case _:
-                self.loss_function_ = (
-                    lambda true, prob, sample_weight=None: loss_function(true, prob)
+                self.loss_function_ = lambda true, prob, sample_weight=None: (
+                    loss_function(true, prob)
                     if sample_weight is None
                     else loss_function(true, prob, sample_weight)
                 )
@@ -64,6 +65,7 @@ class ProbabilisticScoringSystem(BaseEstimator, ClassifierMixin):
         )
         self.logger = logging.getLogger(__name__)
         self.calibrator = None
+        self.class_counts_per_score = None
         self.decision_threshold = 0.5
 
     def fit(self, X, y, sample_weight=None) -> "ProbabilisticScoringSystem":
@@ -113,6 +115,16 @@ class ProbabilisticScoringSystem(BaseEstimator, ClassifierMixin):
             X, self.features, self.scores_, self.feature_thresholds
         )
         self.calibrator = self._create_calibrator().fit(total_scores, y)
+        uniq_total_scores, idx = np.unique(total_scores, return_inverse=True)
+        self.class_counts_per_score = defaultdict(lambda: {0: 0, 1: 0}) | {
+            int(score): {0: 0, 1: 0}
+            | {
+                c_: count
+                for c_, count in zip(*np.unique(y[idx == i], return_counts=True))
+            }
+            for i, score in enumerate(uniq_total_scores)
+        }
+
         return self
 
     def _create_calibrator(self):
@@ -133,6 +145,8 @@ class ProbabilisticScoringSystem(BaseEstimator, ClassifierMixin):
                 return SigmoidTransformer()
             case "beta":
                 return BetaTransformer()
+            case "beta_reg":
+                return BetaTransformer(penalty="l2")
             case _:
                 raise ValueError(
                     f'Calibration method "{self.calibration_method}" doesn\'t exist. '
@@ -146,18 +160,47 @@ class ProbabilisticScoringSystem(BaseEstimator, ClassifierMixin):
             np.array(self.predict_proba(X)[:, 1] > self.decision_threshold, dtype=int)
         ]
 
-    def predict_proba(self, X):
+    def predict_proba(self, X, ci: Optional[Union[float, tuple]] = None):
         """
-        Predicts the probability for
+        Predicts the probability for the given datapoint
+        :param X:
+        :param ci: if given, it will return triples of probabilities (lower, proba, upper) with Clopper-Pearson confidence intervals.
+        The confidence interval must be between 0 and 1. It can also be a tuple of confidence intervals, one for the lower bound, one for the higher.
         """
         if self.calibrator is None:
             raise NotFittedError()
-        proba_pos = self.calibrator.transform(
-            self._compute_total_scores(
-                X, self.features, self.scores_, self.feature_thresholds
-            )
+        scores = self._compute_total_scores(
+            X, self.features, self.scores_, self.feature_thresholds
         )
-        return np.vstack([1 - proba_pos, proba_pos]).T
+        sigma, idx = np.unique(scores, return_inverse=True)
+        ps = self.calibrator.transform(sigma.reshape(-1, 1))
+
+        if ci is None:
+            proba_pos = ps[idx]
+            return np.vstack([1 - proba_pos, proba_pos]).T
+        if isinstance(ci, float):
+            # binomial proportion ci bounds, scaled by bonferroni correction
+            al = au = (1 - ci) / len(sigma)
+        else:
+            assert isinstance(ci, (tuple, list)) and len(ci) == 2
+            al, au = (1 - ci[0]) / len(sigma), (1 - ci[1]) / len(sigma)
+
+        # https://en.wikipedia.org/wiki/Binomial_proportion_confidence_interval#Clopper%E2%80%93Pearson_interval
+        ls, us = [], []
+        for p, i_ in zip(ps, sigma):
+            c = self.class_counts_per_score[int(i_)]
+            neg, pos = c[0], c[1]
+
+            l, u = beta.ppf([al / 2, 1 - au / 2], [pos, pos + 1], [neg + 1, neg])
+            # make sure the bounds are sensible wrt. proba estimate
+            ls.append(min(np.nan_to_num(l, nan=0), p))
+            us.append(max(np.nan_to_num(u, nan=1), p))
+
+        # make sure the bounds are monotonic in the scoreset
+        ls = np.array([max([l] + ls[:i]) for i, l in enumerate(ls)])
+        us = np.array([min([u] + us[i:]) for i, u in enumerate(us)])
+
+        return np.vstack([ls[idx], ps[idx], us[idx]]).T
 
     def score(self, X, y, sample_weight=None):
         """

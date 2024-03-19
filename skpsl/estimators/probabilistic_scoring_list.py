@@ -58,7 +58,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.score_set_ = np.array(sorted(self.score_set, reverse=True, key=abs))
         self.classes_ = None
         assert self.score_set_.size > 0
-        self.stage_clfs = []  # type: list[ProbabilisticScoringSystem]
+        self.stage_clfs = None  # type: Optional[list[ProbabilisticScoringSystem]]
 
     def fit(
         self,
@@ -92,6 +92,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         number_features = X.shape[1]
         remaining_features = set(range(number_features))
+        self.stage_clfs = []
 
         # Stage 0 classifier
         losses = [self._fit_and_store_clf_at_k(X, y, sample_weight)]
@@ -194,7 +195,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         return self.predict_proba(X, k).argmax(axis=1)
 
-    def predict_proba(self, X, k=-1):
+    def predict_proba(self, X, k=-1, **kwargs):
         """
         Predicts the probability using the k-th or last classifier
         :param X: Dataset to predict the probabilities for
@@ -206,7 +207,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 "Please fit the probabilistic scoring classifier before usage."
             )
 
-        return self.stage_clfs[k].predict_proba(X)
+        return self[k].predict_proba(X, **kwargs)
 
     def score(self, X, y, k=None, sample_weight=None):
         """
@@ -300,7 +301,10 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 0,
                 "Threshold",
                 [np.nan]
-                + [(np.nan if t is None or np.isnan(t) else f">{t:.4f}") for t in thresholds],
+                + [
+                    (np.nan if t is None or np.isnan(t) else f">{t:.4f}")
+                    for t in thresholds
+                ],
             )
         return df.reset_index(names=["Stage"])
 
@@ -334,6 +338,6 @@ if __name__ == "__main__":
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
 
-    clf_ = ProbabilisticScoringList({-1, 1, 2}, stage_loss=soft_ranking_loss)
+    clf_ = ProbabilisticScoringList({-1, 1, 2}, stage_loss=soft_ranking_loss, stage_clf_params=dict(calibration_method="beta_reg"))
     clf_.searchspace_analysis(X_)
     print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())

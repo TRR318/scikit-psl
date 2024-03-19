@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "scikit-psl"
-version = "0.6.3"
+version = "0.7.0"
 description = "Probabilistic Scoring List classifier"
 license = "MIT"
 authors = ["Stefan Heid <stefan.heid@upb.de>", "Jonas Hanselle <jonas.hanselle@ifi.lmu.de>"]
@@ -16,7 +16,7 @@ scipy = "^1.11.2"
 joblib = "^1.3.2"
 pandas = "^2.1.0"
 sortedcontainers = "^2.4.0"
-betacal = {git="http://github.com/stheid/scikit-betacal"}
+betacal = {git="http://github.com/stheid/scikit-betacal", branch="feature/made-logreg-regularization-configurable"}
 
 [tool.poetry.group.dev.dependencies]
 sphinx = "^7.2.5"

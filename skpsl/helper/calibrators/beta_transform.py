@@ -9,12 +9,13 @@ from sklearn.preprocessing import MinMaxScaler
 
 
 class BetaTransformer(TransformerMixin):
-    def __init__(self):
+    def __init__(self, **kwargs):
+        self.kwargs= kwargs
         self.clf = None
 
     def fit(self, X, y):
         self.clf = Pipeline([("scaler", MinMaxScaler()),
-                        ("calibrator", BetaCalibration("abm"))]).fit(X.astype(float), y)
+                        ("calibrator", BetaCalibration("abm", **self.kwargs))]).fit(X.astype(float), y)
         return self
 
     def transform(self, X):
