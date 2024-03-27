@@ -338,6 +338,6 @@ if __name__ == "__main__":
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
 
-    clf_ = ProbabilisticScoringList({-1, 1, 2}, stage_loss=soft_ranking_loss, stage_clf_params=dict(calibration_method="beta_reg"))
+    clf_ = ProbabilisticScoringList({-1, 1, 2}, stage_loss=soft_ranking_loss, stage_clf_params=dict(calibration_method="beta"))
     clf_.searchspace_analysis(X_)
     print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
