@@ -1,4 +1,5 @@
 import logging
+import re
 from collections import defaultdict
 from itertools import permutations, product, chain
 from typing import Optional
@@ -6,6 +7,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
+from matplotlib import pyplot as plt
+from matplotlib.ticker import MaxNLocator
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.metrics import brier_score_loss
@@ -308,6 +311,56 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             )
         return df.reset_index(names=["Stage"])
 
+    def show(self, k=None):
+
+        def extract_integer(index):
+            match = re.search(r"-?\d+", index)
+            if match:
+                return int(match.group())
+            else:
+                return None
+
+        df = clf_.inspect(k=k)
+        n = df.shape[0]
+        fig = plt.figure(figsize=(10, 8), constrained_layout=False)
+        grid = fig.add_gridspec(n, 1, wspace=0.0, hspace=0.0)
+        for i in range(1, n):
+            entries = (df.iloc[i, 4:].dropna() * 20).round() / 20
+            idx = entries.index.map(extract_integer)
+            entries = entries.set_axis(idx)
+            entries_grouped = (
+                entries.reset_index()
+                .set_index(entries.name)
+                .squeeze()
+                .groupby(level=0)
+                .agg(["min", "max"])
+            )
+
+            ax = fig.add_subplot(grid[i])
+            for y, score in entries_grouped["min"].items():
+                ax.text(y, 0.33, score, ha="center", va="center")
+            for y, score in entries_grouped["max"].items():
+                ax.text(y, 0.66, score, ha="center", va="center")
+
+            ax.yaxis.set_visible(False)
+            ax.spines["left"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.xaxis.set_minor_locator(MaxNLocator(20))
+            if i != n - 1:
+                for tick in ax.xaxis.get_major_ticks():
+                    tick.tick1line.set_visible(False)
+                    tick.tick2line.set_visible(False)
+                    tick.label1.set_visible(False)
+                    tick.label2.set_visible(False)
+            for tick in ax.xaxis.get_minor_ticks():
+                tick.tick1line.set_visible(False)
+                tick.tick2line.set_visible(False)
+                tick.label1.set_visible(False)
+                tick.label2.set_visible(False)
+
+            ax.xaxis.grid(True)
+            ax.xaxis.grid(True, "minor", ls=":")
+
     def __len__(self):
         if self.stage_clfs is None:
             return 0
@@ -338,6 +391,10 @@ if __name__ == "__main__":
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
 
-    clf_ = ProbabilisticScoringList({-1, 1, 2}, stage_loss=soft_ranking_loss, stage_clf_params=dict(calibration_method="beta"))
+    clf_ = ProbabilisticScoringList(
+        {-1, 1, 2},
+        stage_loss=soft_ranking_loss,
+        stage_clf_params=dict(calibration_method="beta"),
+    )
     clf_.searchspace_analysis(X_)
     print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
