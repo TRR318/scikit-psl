@@ -311,7 +311,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             )
         return df.reset_index(names=["Stage"])
 
-    def show(self, k=None):
+    def show(self, k=None, bins=50):
 
         def extract_integer(index):
             match = re.search(r"-?\d+", index)
@@ -325,7 +325,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         fig = plt.figure(figsize=(10, 8), constrained_layout=False)
         grid = fig.add_gridspec(n, 1, wspace=0.0, hspace=0.0)
         for i in range(1, n):
-            entries = (df.iloc[i, 4:].dropna() * 20).round() / 20
+            entries = (df.iloc[i, 4:].dropna().astype(float) * bins).round() / bins
             idx = entries.index.map(extract_integer)
             entries = entries.set_axis(idx)
             entries_grouped = (
@@ -335,12 +335,19 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 .groupby(level=0)
                 .agg(["min", "max"])
             )
+            g_min = idx.min()
+            g_max = idx.max()
 
             ax = fig.add_subplot(grid[i])
-            for y, score in entries_grouped["min"].items():
-                ax.text(y, 0.33, score, ha="center", va="center")
-            for y, score in entries_grouped["max"].items():
-                ax.text(y, 0.66, score, ha="center", va="center")
+            for y, min_, max_ in entries_grouped.itertuples():
+                if min_ == max_:
+                    ax.text(y, 0.5, f"{min_}", ha="center", va="center")
+                elif min_ == g_min:
+                    ax.text(y, 0.5, f"≤{max_}", ha="center", va="center")
+                elif max_ == g_max:
+                    ax.text(y, 0.5, f"≥{min_}", ha="center", va="center")
+                else:
+                    ax.text(y, 0.5, f"{min_}-{max_}", ha="center", va="center")
 
             ax.yaxis.set_visible(False)
             ax.spines["left"].set_visible(False)
@@ -392,9 +399,7 @@ if __name__ == "__main__":
     X_, y_ = make_classification(random_state=42)
 
     clf_ = ProbabilisticScoringList(
-        {-1, 1, 2},
-        stage_loss=soft_ranking_loss,
-        stage_clf_params=dict(calibration_method="beta"),
-    )
+        {-1, 1, 2},    )
     clf_.searchspace_analysis(X_)
-    print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
+    #print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
+    clf_.fit(X_,y_)
