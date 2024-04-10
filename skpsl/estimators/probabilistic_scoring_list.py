@@ -320,7 +320,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             else:
                 return None
 
-        df = clf_.inspect(k=k)
+        df = self.inspect(k=k)
         n = df.shape[0]
         fig = plt.figure(figsize=(10, 8), constrained_layout=False)
         grid = fig.add_gridspec(n, 1, wspace=0.0, hspace=0.0)
