@@ -295,10 +295,10 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         df = df[sorted(df.columns)]
         df.columns = [f"T = {t_}" for t_ in df.columns]
         df.insert(0, "Score", np.array([np.nan] + list(scores)))
-        if feature_names is not None:
-            if len(feature_names) < max(*features) + 1:
+        if feature_names is not None and features:
+            if len(feature_names) < max(features) + 1:
                 raise ValueError(
-                    f"Missing feature names for features {list(range(len(feature_names), max(*features)+1))}"
+                    f"Missing feature names for features {list(range(len(feature_names), max(features)+1))}"
                 )
             feature_names = [feature_names[i] for i in features]
             df.insert(0, "Feature", [np.nan] + feature_names[:k])
@@ -410,5 +410,5 @@ if __name__ == "__main__":
     clf_ = ProbabilisticScoringList({-1, 1, 2})
     clf_.searchspace_analysis(X_)
     # print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
-    clf_.fit(X_, y_, predef_features=[2, 1], k="predef")
+    clf_.fit(X_, y_, predef_features=[2,1], k="predef")
     print(clf_.inspect())
