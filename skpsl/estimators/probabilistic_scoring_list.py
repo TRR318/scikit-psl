@@ -2,7 +2,7 @@ import logging
 import re
 from collections import defaultdict
 from itertools import permutations, product, chain
-from typing import Optional
+from typing import Optional, Union, Literal
 
 import numpy as np
 import pandas as pd
@@ -68,9 +68,10 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         X,
         y,
         sample_weight=None,
-        predef_features: Optional[np.ndarray] = None,
-        predef_scores: Optional[np.ndarray] = None,
+        predef_features: Optional[Union[np.ndarray, list]] = None,
+        predef_scores: Optional[Union[np.ndarray, list]] = None,
         strict=True,
+        k: Union[int, None, Literal["predef"]] = None,
     ) -> "ProbabilisticScoringList":
         """
         Fits a probabilistic scoring list to the given data
@@ -79,6 +80,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param y:
         :param predef_features:
         :param predef_scores:
+        :param k: number of stages to fit. if None, all features will be used, if a number that number of stages, if predef stages for all predef features
         :return: The fitted classifier
         """
         X, y = np.array(X), np.array(y)
@@ -95,14 +97,21 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         number_features = X.shape[1]
         remaining_features = set(range(number_features))
+        k = (
+            k
+            if isinstance(k, int)
+            else (len(predef_features) if k == "predef" else number_features)
+        )
         self.stage_clfs = []
 
         # Stage 0 classifier
         losses = [self._fit_and_store_clf_at_k(X, y, sample_weight)]
         stage = 0
 
-        while remaining_features and (
-            self.loss_cutoff is None or losses[-1] > self.loss_cutoff
+        while (
+            remaining_features
+            and (self.loss_cutoff is None or losses[-1] > self.loss_cutoff)
+            and (len(self.features) < k)
         ):
             len_ = min(self.lookahead, len(remaining_features))
             len_pre = min(len(set(predef_features) & remaining_features), len_)
@@ -262,7 +271,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param feature_names: names of the features.
         :return:
         """
-        k = k or len(self) - 1
+        k = len(self) - 1 if k is None else k
 
         scores = self.stage_clfs[k].scores
         features = self.stage_clfs[k].features
@@ -398,8 +407,8 @@ if __name__ == "__main__":
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42)
 
-    clf_ = ProbabilisticScoringList(
-        {-1, 1, 2},    )
+    clf_ = ProbabilisticScoringList({-1, 1, 2})
     clf_.searchspace_analysis(X_)
-    #print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
-    clf_.fit(X_,y_)
+    # print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
+    clf_.fit(X_, y_, predef_features=[2, 1], k="predef")
+    print(clf_.inspect())
