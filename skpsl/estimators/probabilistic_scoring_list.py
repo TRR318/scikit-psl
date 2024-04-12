@@ -296,9 +296,9 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         df.columns = [f"T = {t_}" for t_ in df.columns]
         df.insert(0, "Score", np.array([np.nan] + list(scores)))
         if feature_names is not None:
-            if len(feature_names) != len(features):
+            if len(feature_names) < max(*features) + 1:
                 raise ValueError(
-                    f"Passed feature names are of incorrect length! Passed {len(feature_names)}, expected {len(features)}."
+                    f"Missing feature names for features {list(range(len(feature_names), max(*features)+1))}"
                 )
             feature_names = [feature_names[i] for i in features]
             df.insert(0, "Feature", [np.nan] + feature_names[:k])
