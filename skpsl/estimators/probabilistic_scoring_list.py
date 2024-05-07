@@ -80,7 +80,8 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         :param y:
         :param predef_features:
         :param predef_scores:
-        :param k: number of stages to fit. if None, all features will be used, if a number that number of stages, if predef stages for all predef features
+        :param k: number of stages to fit. if None, all features will be used,
+          if a number that number of stages, if "predef" stages for all predef features
         :return: The fitted classifier
         """
         X, y = np.array(X), np.array(y)
@@ -405,10 +406,10 @@ if __name__ == "__main__":
     from sklearn.model_selection import cross_val_score
 
     # Generating synthetic data with continuous features and a binary target variable
-    X_, y_ = make_classification(random_state=42)
+    X_, y_ = make_classification(random_state=42, n_features=5)
 
     clf_ = ProbabilisticScoringList({-1, 1, 2})
     clf_.searchspace_analysis(X_)
     # print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
-    clf_.fit(X_, y_, predef_features=[2,1], k="predef")
+    clf_.fit(X_, y_, predef_features=[2,1,0,3,4], k="predef")
     print(clf_.inspect())
