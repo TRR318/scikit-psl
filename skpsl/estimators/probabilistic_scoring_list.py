@@ -2,6 +2,7 @@ import logging
 import re
 from collections import defaultdict
 from itertools import permutations, product, chain
+from operator import itemgetter
 from typing import Optional, Union, Literal
 
 import numpy as np
@@ -15,7 +16,6 @@ from sklearn.metrics import brier_score_loss
 
 from skpsl.estimators.probabilistic_scoring_system import ProbabilisticScoringSystem
 from skpsl.helper import create_optimizer
-from skpsl.metrics import soft_ranking_loss
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
@@ -25,15 +25,15 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
     """
 
     def __init__(
-        self,
-        score_set: set,
-        loss_cutoff: float = None,
-        method="bisect",
-        lookahead=1,
-        n_jobs=None,
-        stage_loss=None,
-        cascade_loss=None,
-        stage_clf_params=None,
+            self,
+            score_set: set,
+            loss_cutoff: float = None,
+            method="bisect",
+            lookahead=1,
+            n_jobs=None,
+            stage_loss=None,
+            cascade_loss=None,
+            stage_clf_params=None,
     ):
         """
 
@@ -64,14 +64,14 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.stage_clfs = None  # type: Optional[list[ProbabilisticScoringSystem]]
 
     def fit(
-        self,
-        X,
-        y,
-        sample_weight=None,
-        predef_features: Optional[Union[np.ndarray, list]] = None,
-        predef_scores: Optional[Union[np.ndarray, list]] = None,
-        strict=True,
-        k: Union[int, None, Literal["predef"]] = None,
+            self,
+            X,
+            y,
+            sample_weight=None,
+            predef_features: Optional[Union[np.ndarray, list]] = None,
+            predef_scores: Optional[Union[np.ndarray, list]] = None,
+            strict=True,
+            k: Union[int, None, Literal["predef"]] = None,
     ) -> "ProbabilisticScoringList":
         """
         Fits a probabilistic scoring list to the given data
@@ -110,9 +110,9 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         stage = 0
 
         while (
-            remaining_features
-            and (self.loss_cutoff is None or losses[-1] > self.loss_cutoff)
-            and (len(self.features) < k)
+                remaining_features
+                and (self.loss_cutoff is None or losses[-1] > self.loss_cutoff)
+                and (len(self.features) < k)
         ):
             len_ = min(self.lookahead, len(remaining_features))
             len_pre = min(len(set(predef_features) & remaining_features), len_)
@@ -135,29 +135,22 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
                 )
             ]
 
-            new_cascade_losses, f, s, t = zip(
-                *Parallel(n_jobs=self.n_jobs)(
-                    delayed(self._optimize)(
-                        list(f_seq), list(s_seq), losses, X, y, sample_weight
-                    )
-                    for (f_seq, s_seq) in chain.from_iterable(
-                        product([fext], product(*[predef_scores[f] for f in fext]))
-                        for fext in f_exts
-                    )
-                )
-            )
-
-            i = np.argmin(new_cascade_losses)
-            remaining_features.remove(f[i])
+            new_cascade_losses, f, s, t = min(Parallel(n_jobs=self.n_jobs, return_as="generator_unordered")(
+                self._optimize(list(f_seq), list(s_seq), losses, X, y, sample_weight)
+                for f_seq, s_seq in
+                chain(*(product([extension], product(*[predef_scores[f] for f in extension]))
+                        for extension in f_exts))
+            ), key=itemgetter(0))
+            remaining_features.remove(f)
 
             losses.append(
                 self._fit_and_store_clf_at_k(
                     X,
                     y,
                     sample_weight,
-                    self.features + [f[i]],
-                    self.scores + [s[i]],
-                    self.thresholds + [t[i]],
+                    self.features + [f],
+                    self.scores + [s],
+                    self.thresholds + [t],
                 )
             )
             stage += 1
@@ -174,8 +167,9 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         self.stage_clfs.append(k_clf)
         return k_clf.score(X, y, sample_weight)
 
+    @delayed
     def _optimize(
-        self, feature_extension, score_extension, cascade_losses, X, y, sample_weight
+            self, feature_extension, score_extension, cascade_losses, X, y, sample_weight
     ):
         cascade_losses = cascade_losses.copy()
         # build cascade extension
@@ -252,7 +246,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         f, s, l = X.shape[1], len(self.score_set), self.lookahead
 
         # models = calculate number of models at each stage
-        print(f"Searchspace size: {(s+1)**f:.2g}")
+        print(f"Searchspace size: {(s + 1) ** f:.2g}")
 
         # calculate lookahead induced subspace
         effective_searchspace = sum(
@@ -299,7 +293,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
         if feature_names is not None and features:
             if len(feature_names) < max(features) + 1:
                 raise ValueError(
-                    f"Missing feature names for features {list(range(len(feature_names), max(features)+1))}"
+                    f"Missing feature names for features {list(range(len(feature_names), max(features) + 1))}"
                 )
             feature_names = [feature_names[i] for i in features]
             df.insert(0, "Feature", [np.nan] + feature_names[:k])
@@ -408,8 +402,6 @@ if __name__ == "__main__":
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42, n_features=5)
 
-    clf_ = ProbabilisticScoringList({-1, 1, 2})
+    clf_ = ProbabilisticScoringList({-1, 1, 2}, lookahead=2)
     clf_.searchspace_analysis(X_)
-    # print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
-    clf_.fit(X_, y_, predef_features=[2,1,0,3,4], k="predef")
-    print(clf_.inspect())
+    print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
