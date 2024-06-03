@@ -1,6 +1,7 @@
 import logging
 import re
 from collections import defaultdict
+from functools import cache
 from itertools import permutations, product, chain
 from operator import itemgetter
 from typing import Optional, Union, Literal
@@ -10,12 +11,15 @@ import pandas as pd
 from joblib import Parallel, delayed
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator
+from more_itertools import powerset
+from scipy.special import comb
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.metrics import brier_score_loss
 
 from skpsl.estimators.probabilistic_scoring_system import ProbabilisticScoringSystem
 from skpsl.helper import create_optimizer
+from skpsl.metrics import expected_entropy_loss
 
 
 class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
@@ -216,7 +220,7 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
         return self[k].predict_proba(X, **kwargs)
 
-    def score(self, X, y, k=None, sample_weight=None):
+    def score(self, X, y, *, k=None, sample_weight=None):
         """
         Calculates the Brier score of the model
         :param X:
@@ -372,6 +376,71 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
             ax.xaxis.grid(True)
             ax.xaxis.grid(True, "minor", ls=":")
 
+    def shapley(self, mode: Literal["refit", "instance"] = "instance", X=None, y=None):
+        if self.stage_clfs is None:
+            raise NotFittedError()
+
+        match mode:
+            case "refit":
+                if X is None or y is None:
+                    raise AttributeError("if mode is refit, we actually need data to refit (X, y)")
+
+                # calculate all probabilistic scoring systems from the feature subsets with the fitted scores
+                @cache
+                def value(f: tuple):
+                    if not f:
+                        return 0
+                    return ProbabilisticScoringSystem(
+                        features=list(f),
+                        scores=list(np.array(self.scores)[list(f)]),
+                        initial_feature_thresholds=list(np.array(self.thresholds)[list(f)])
+                    ).fit(X, y).score(X, y)
+            case "instance":
+                # calculate the values with the specific feature score pairs and calibration function, however
+                # for missing features we use the expected score for the missing features
+                # (relative frequency of the feature being positive and the score assigned to existing feature)
+
+                @cache
+                def value(f: tuple):
+                    if not f:
+                        return 0
+                    if f == tuple(self.features)[:len(f)]:  # is feature prefix
+                        return self[len(f)].score(X, y)  # select corresponding stageclf
+
+                    for i in range(len(f), len(self)):
+                        if not set(f) - set(self.features[:i]):
+                            break
+
+                    # else select the smallest stage clf that contains all values in f
+                    stageclf = self[i]
+
+                    data = np.array(X)[:, stageclf.features]
+                    thresholds = np.array(stageclf.feature_thresholds, dtype=float)
+                    thresholds[np.isnan(thresholds)] = 0.5
+                    data = (data > thresholds[None, :]).astype(int)
+                    # feature indices have changed because of the view created above
+                    # calculate the indices of stageclf.features that are not in f
+                    idx = [i for i, v in enumerate(stageclf.features) if v not in f]
+                    # set missing features to the expected value
+                    data[:, idx] = data[:, idx].mean(axis=0)
+                    total_scores = (data @ stageclf.scores).reshape(-1, 1)
+
+                    # use stage calibrator to predict
+                    sigma, idx = np.unique(total_scores, return_inverse=True)
+                    ps = stageclf.calibrator.transform(sigma.reshape(-1, 1))
+
+                    return expected_entropy_loss(ps[idx])
+            case _:
+                raise AttributeError(f"The specified mode does not exist: {mode}")
+
+        n = len(self.features)
+        # calculating the shapley values for each feature (marginal contribution/factor for each subset normalized by n)
+        return {f: sum(
+            (value(tuple(set(s) | {f})) - value(s))
+            / comb(n - 1, len(s))
+            for s in powerset(set(self.features) - {f})
+        ) / n for f in self.features}
+
     def __len__(self):
         if self.stage_clfs is None:
             return 0
@@ -397,11 +466,14 @@ class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
 
 if __name__ == "__main__":
     from sklearn.datasets import make_classification
-    from sklearn.model_selection import cross_val_score
 
     # Generating synthetic data with continuous features and a binary target variable
     X_, y_ = make_classification(random_state=42, n_features=5)
 
-    clf_ = ProbabilisticScoringList({-1, 1, 2}, lookahead=2)
+    clf_ = ProbabilisticScoringList({-1, 1, 2}, lookahead=1)
     clf_.searchspace_analysis(X_)
-    print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
+    # print("Total Brier score:", cross_val_score(clf_, X_, y_, cv=5, n_jobs=5).mean())
+    clf_.fit(X_, y_)
+    print(clf_.inspect())
+    print("instance: ", clf_.shapley("instance", X_, y_))
+    print("refit: ", clf_.shapley("refit", X_, y_))
