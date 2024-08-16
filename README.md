@@ -8,9 +8,9 @@
 Probabilistic scoring lists are incremental models that evaluate one feature of the dataset at a time.
 PSLs can be seen as a extension to *scoring systems* in two ways:
 - they can be evaluated at any stage allowing to trade of model complexity and prediction speed.
-- they provide probablistic predictions instead of determnistic decisions for each possible score.
+- they provide probablistic predictions instead of deterministic decisions for each possible score.
 
-Scoring Systems are used as decision support for human experts in medical or law domains.
+Scoring systems are used as decision support systems for human experts e.g. in medical or judical decision making.
 
 This implementation adheres to the [sklearn-api](https://scikit-learn.org/stable/glossary.html#glossary-estimator-types).
 
