@@ -82,7 +82,7 @@ class ProbabilisticScoringSystem(BaseEstimator, ClassifierMixin):
         for i, (f, t) in enumerate(zip(self.features, self.feature_thresholds)):
             feature_values = X[:, f]
             uniq_f_vals = np.unique(feature_values)
-            is_data_binary = len(set(uniq_f_vals)) <= 2 and set(np.unique(feature_values).astype(float)) <= {0.0, 1.0}
+            is_data_binary = len(set(uniq_f_vals)) <= 2 and set(uniq_f_vals.astype(float)) <= {0.0, 1.0}
             if (t is np.nan or t is None) and not is_data_binary:
                 self.logger.debug(
                     f"feature {f} is non-binary and threshold not set: calculating threshold..."
