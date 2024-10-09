@@ -21,7 +21,8 @@ class MinEntropyBinarizer(BaseEstimator, TransformerMixin, auto_wrap_output_keys
 
     def fit(self, X, y=None):
         def binarize(x):
-            is_data_binary = set(np.unique(x).astype(int)) == {0, 1}
+            uniq_f_vals = np.unique(x)
+            is_data_binary = len(set(uniq_f_vals)) <= 2 and set(uniq_f_vals.astype(float)) <= {0.0, 1.0}
             if is_data_binary:
                 return np.nan
             return self._optimizer(partial(MinEntropyBinarizer._cut_entropy, y=y), x)
