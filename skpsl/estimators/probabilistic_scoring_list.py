@@ -15,7 +15,7 @@ from skpsl.helper import create_optimizer
 from skpsl.metrics import soft_ranking_loss
 
 
-class ProbabilisticScoringList(BaseEstimator, ClassifierMixin):
+class ProbabilisticScoringList(ClassifierMixin,BaseEstimator):
     """
     Probabilistic scoring list classifier.
     A probabilistic classifier that greedily creates a PSL selecting one feature at a time

@@ -8,24 +8,24 @@ from sklearn.base import BaseEstimator, ClassifierMixin, TransformerMixin
 from sklearn.exceptions import NotFittedError
 from sklearn.isotonic import IsotonicRegression
 
-from skpsl.metrics import expected_entropy_loss
 from skpsl.helper.calibrators import BetaTransformer, SigmoidTransformer
+from skpsl.metrics import expected_entropy_loss
 
 
-class ProbabilisticScoringSystem(BaseEstimator, ClassifierMixin):
+class ProbabilisticScoringSystem(ClassifierMixin, BaseEstimator):
     """
     Internal class for the classifier at stage k of the probabilistic scoring list
     """
 
     def __init__(
-        self,
-        features: list[int],
-        scores: list[int],
-        initial_feature_thresholds: Optional[list[Optional[float]]] = None,
-        threshold_optimizer: Optional[callable] = None,
-        calibration_method="isotonic",
-        balance_class_weights=False,
-        loss_function=None,
+            self,
+            features: list[int],
+            scores: list[int],
+            initial_feature_thresholds: Optional[list[Optional[float]]] = None,
+            threshold_optimizer: Optional[callable] = None,
+            calibration_method="isotonic",
+            balance_class_weights=False,
+            loss_function=None,
     ):
         """
         Regardless of the stage-loss, thresholds are optimized with respect to expected entropy
@@ -119,10 +119,10 @@ class ProbabilisticScoringSystem(BaseEstimator, ClassifierMixin):
         uniq_total_scores, idx = np.unique(total_scores, return_inverse=True)
         self.class_counts_per_score = defaultdict(lambda: {0: 0, 1: 0}) | {
             int(score): {0: 0, 1: 0}
-            | {
-                c_: count
-                for c_, count in zip(*np.unique(y[idx == i], return_counts=True))
-            }
+                        | {
+                            c_: count
+                            for c_, count in zip(*np.unique(y[idx == i], return_counts=True))
+                        }
             for i, score in enumerate(uniq_total_scores)
         }
 
@@ -130,9 +130,9 @@ class ProbabilisticScoringSystem(BaseEstimator, ClassifierMixin):
 
     def _create_calibrator(self):
         if (
-            hasattr(self.calibration_method, "fit")
-            and hasattr(self.calibration_method, "transform")
-            and isinstance(self.calibration_method, TransformerMixin)
+                hasattr(self.calibration_method, "fit")
+                and hasattr(self.calibration_method, "transform")
+                and isinstance(self.calibration_method, TransformerMixin)
         ):
             return self.calibration_method
 
