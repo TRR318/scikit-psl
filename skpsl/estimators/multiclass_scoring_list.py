@@ -1,6 +1,7 @@
 import inspect
 import logging
-from itertools import product, repeat
+from itertools import product, permutations
+from math import factorial
 from operator import itemgetter
 
 import numpy as np
@@ -21,7 +22,7 @@ from skpsl.preprocessing import MinEntropyBinarizer
 LOGGER = logging.getLogger(__name__)
 
 
-class MulticlassScoringList(ClassifierMixin,BaseEstimator):
+class MulticlassScoringList(ClassifierMixin, BaseEstimator):
 
     def __init__(self, score_set, method=None, cascade_loss=None, random_state=None, ga_params=None, **kwargs):
         """
@@ -46,6 +47,7 @@ class MulticlassScoringList(ClassifierMixin,BaseEstimator):
         self.n_features = None
         self.ga_instance = None
         self.stage = None
+        self.lookahead = kwargs.get("lookahead", 1)
         self.l2 = kwargs.get("l2", 0)
         self.n_jobs = kwargs.get("n_jobs", 1)
         ga_default = dict(maxiter=50, popsize=10, init_pop_factor=1, init_pop_noise=.2, parents_mating=5)
@@ -84,37 +86,58 @@ class MulticlassScoringList(ClassifierMixin,BaseEstimator):
 
                 X = np.hstack((np.ones((n_instances, 1)), X))
 
-                def opt(s, f, logits):
-                    logits_ = logits + X[:, [f + 1]] @ np.array([s])
-                    return f, list(s), logits_, log_loss(y_trans, softmax(logits_, axis=1)) + self.l2 * (
-                            (np.array(s) / max(abs(self.score_set_))) ** 2).mean()
+                def opt(s_seq, f_seq, logits, cumloss):
+                    logits_ = [logits]
+                    losses = [cumloss]
+                    for i, (s, f) in enumerate(zip(s_seq, f_seq)):
+                        logits_.append(logits_[-1] + X[:, [f + 1]] @ np.array([s]))
+
+                        losses.append(log_loss(y_trans, softmax(logits_[-1], axis=1)) + self.l2 * (
+                                (np.array(s) / max(abs(self.score_set_))) ** 2).mean())
+
+                    return (f_seq[0],  # new feature
+                            list(s_seq[0]),  # new scores (per class)
+                            logits_[1],  # accumulated logits
+                            sum(losses[0:2]),  # new cumloss w/o lookahead
+                            sum(losses)  # cascade loss with lookahead
+                            )
 
                 logits = np.zeros((n_instances, self.n_classes))  # np.repeat([s], n_instances, axis=0)
 
+                # effective lookahead
+                l = min(self.lookahead, self.n_features) - 1
+                remaining_features = set(range(self.n_features))
                 # bias term
                 res = tqdm(
-                    Parallel(n_jobs=1, return_as="generator")(
-                        delayed(opt)(s, -1, logits)
-                        for (s) in
-                        sorted(product(*repeat(self.score_set_, self.n_classes)), key=lambda x: sum(abs(np.array(x))))
+                    Parallel(n_jobs=self.n_jobs, return_as="generator")(
+                        delayed(opt)(s, [-1] + list(f), logits, 0)
+                        for (f, s) in
+                        product(permutations(remaining_features, l),
+                            product(product(self.score_set_, repeat=self.n_classes), repeat=l + 1)
+                        )
                     ),
-                    total=len(self.score_set_) ** self.n_classes)
-                _, s, logits, _ = min(res, key=itemgetter(3))
+                    total=(factorial(len(remaining_features)) / factorial(len(remaining_features) - l))
+                          * len(self.score_set_) ** (self.n_classes * (l + 1))
+                )
+                _, s, logits, cum_loss, _ = min(res, key=itemgetter(4))
                 LOGGER.info(f"bias terms: {s}")
                 scores.append(s)
 
                 # n features
-                remaining_features = set(range(self.n_features))
                 while remaining_features:
+                    l = min(self.lookahead, len(remaining_features))
                     res = tqdm(
                         Parallel(n_jobs=self.n_jobs, return_as="generator")(
-                            delayed(opt)(s, f, logits)
+                            delayed(opt)(s, f, logits, cum_loss)
                             for (f, s) in
-                            product(remaining_features, product(*repeat(self.score_set_, self.n_classes)))
+                            product(permutations(remaining_features, l),
+                                    product(product(self.score_set_, repeat=self.n_classes), repeat=l))
                         ),
-                        total=len(remaining_features) * len(self.score_set_) ** self.n_classes)
+                        total=(factorial(len(remaining_features)) / factorial(len(remaining_features) - l))
+                              * len(self.score_set_) ** (self.n_classes * l)
+                    )
 
-                    f, s, logits, _ = min(res, key=itemgetter(3))
+                    f, s, logits, cum_loss, _ = min(res, key=itemgetter(4))
 
                     LOGGER.info(f"scores for stage {len(scores)}: {s}")
                     features.append(f)
@@ -297,12 +320,13 @@ class MulticlassScoringList(ClassifierMixin,BaseEstimator):
     def features(self):
         return np.where(self.f_ranks < self.stage)[0]
 
+
 if __name__ == '__main__':
     from sklearn.datasets import load_iris
 
     data = load_iris()
     X, y = data.data, data.target
     clf = MulticlassScoringList(score_set=set(range(-3, 4)),  # cascade_loss=lambda x: x[-1]
-                                method="greedy").fit(X, y)
+                                method="greedy", lookahead=1, n_jobs=12).fit(X, y)
     print(clf.inspect(data.feature_names, data.target_names))
     clf.predict(X)
