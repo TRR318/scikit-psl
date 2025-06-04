@@ -12,10 +12,15 @@ from scipy.special import softmax
 from scipy.stats import rankdata, truncnorm
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.exceptions import NotFittedError
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss, accuracy_score
 from sklearn.preprocessing import LabelBinarizer
 from tqdm import tqdm
+import optax
+from mip import Model, xsum, INTEGER, minimize
+from jax import numpy as jnp
+from jax import grad
 
 from skpsl.preprocessing import MinEntropyBinarizer
 
@@ -24,7 +29,7 @@ LOGGER = logging.getLogger(__name__)
 
 class MulticlassScoringList(ClassifierMixin, BaseEstimator):
 
-    def __init__(self, score_set, method=None, cascade_loss=None, random_state=None, ga_params=None, **kwargs):
+    def __init__(self, score_set, method=None, cascade_loss=None, random_state=None, ga_params=None, lookahead=1, **kwargs):
         """
         :param score_set:
         :param cascade_loss: function to aggregate the stage losses
@@ -35,6 +40,7 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
         self.cascade_loss = cascade_loss
         self.method = method if method is not None else "greedy"
         self.random_state = random_state
+        self.lookahead = lookahead
         self.ga_params = ga_params
 
         self.score_set_ = np.array(sorted(score_set, reverse=True, key=abs))
@@ -47,7 +53,6 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
         self.n_features = None
         self.ga_instance = None
         self.stage = None
-        self.lookahead = kwargs.get("lookahead", 1)
         self.l2 = kwargs.get("l2", 0)
         self.n_jobs = kwargs.get("n_jobs", 1)
         ga_default = dict(maxiter=50, popsize=10, init_pop_factor=1, init_pop_noise=.2, parents_mating=5)
@@ -149,12 +154,85 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
                 # index ordering scores by ranks to get scores in feature permutation (congrent to the f_ranks)
                 self.scores = np.array(scores)[[0] + list(self.f_ranks + 1)].T
 
+            case "mip":
+                # Fit feature importance
+                clf = RandomForestClassifier().fit(X, y)
+                self.f_ranks = np.argsort(clf.feature_importances_)[::-1]  # descending order
+
+                # prepare data to allow for monotonic slices
+                X_ = X.copy()
+                X_ = X_[:, self.f_ranks]  # reorder features based on importance
+                X = np.hstack((np.ones((n_instances, 1)), X_))
+
+                # prepare loss function
+                def logloss(w, X, y):
+                    return sum(
+                        [
+                            optax.softmax_cross_entropy_with_integer_labels(
+                                X[:, : stage + 1] @ w[:, : stage + 1].T, y
+                            ).mean()
+                            for stage in range(self.n_features)
+                        ]
+                    ) + self.n_features * self.l2 * jnp.mean(w ** 2)
+                logloss_grad = grad(logloss)
+
+                model = Model()
+                loss = model.add_var(lb=0, name="loss")
+                [
+                    model.add_var(var_type=INTEGER, lb=-3, ub=3, name=f"w{j},{i}")
+                    for i in range(self.n_features + 1)
+                    for j in range(self.n_classes)
+                ]
+                model.objective = minimize(loss)
+                model.max_mip_gap = 0.1
+                model.max_mip_gap_abs = 0.01
+                model.max_seconds = 30
+
+                incumbent = None
+                incumbent_loss = float("inf")
+                with tqdm() as pbar:
+                    while True:
+                        model.optimize()
+                        w_vars = list(model.vars)[1:]
+                        w = [var.x for var in w_vars]
+                        w_np = np.array(w).reshape(self.n_classes, -1)
+                        w_jnp = jnp.array(w_np)
+
+                        # add cut
+                        f = float(logloss(w_jnp, X_, y))
+                        g = np.array(logloss_grad(w_jnp, X_, y)).flatten().astype(float)
+                        model += model.vars["loss"] >= f + xsum(
+                            g[j] * (w_vars[j] - w[j]) for j in range(self.n_classes * (self.n_features + 1))
+                        )
+
+                        # keep incumbent (best real loss!)
+                        if f < incumbent_loss:
+                            incumbent = w_np.copy()
+                            incumbent_loss = f
+                            incumbent_index = pbar.n + 1
+
+                        opt_gap = 1 - model.vars["loss"].x / incumbent_loss
+                        pbar.update()
+                        pbar.set_description(
+                            f"Proxloss: {model.objective_value:.2f}, Loss: {f:.2f}, Gap: {opt_gap:.3f}, Incumbent: {incumbent_index}@{incumbent_loss:.2f}"
+                        )
+
+                        if pbar.n - incumbent_index > 80:
+                            print("No improvement for 100 iterations, stopping optimization.")
+                            break
+
+                        if opt_gap < 0.02:
+                            model.max_mip_gap /= 1.5
+                            # model.max_mip_gap_abs = 0.0001
+                            continue
+                self.scores = incumbent.astype(int)[:,[0] + (1 + self.f_ranks).tolist()]
+
             case "ga":
                 # fit lr as a seed for the genetic search
                 lr = LogisticRegression().fit(X, y)
 
                 # FEATURE RANKINGS
-                self.f_ranks = np.argsort(lr.coef_.mean(axis=0))
+                self.f_ranks = np.argsort(lr.coef_.mean(axis=0))[::-1]
 
                 # CALCULATE SCORES
                 # extract logits from LR and rescale and round to the score_set
