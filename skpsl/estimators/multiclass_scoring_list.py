@@ -1,12 +1,15 @@
 import inspect
 import logging
-from itertools import product, permutations
+from itertools import product, permutations, combinations_with_replacement
 from math import factorial
 from operator import itemgetter
+
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
 from joblib.parallel import delayed, Parallel
+from ml_dtypes import float8_e3m4
 from pygad import pygad
 from scipy.special import softmax
 from scipy.stats import rankdata, truncnorm
@@ -155,14 +158,22 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
                 self.scores = np.array(scores)[[0] + list(self.f_ranks + 1)].T
 
             case "mip":
+                y_ = y_trans.squeeze()
+                if y_.ndim > 1:
+                    y_ = y_.argmax(axis=1)
                 # Fit feature importance
-                clf = RandomForestClassifier().fit(X, y)
-                self.f_ranks = np.argsort(clf.feature_importances_)[::-1]  # descending order
+                clf = RandomForestClassifier().fit(X, y_)
+
+                # ordering f1, f4, f3, f2
+                # ranking: 1, 4, 3, 2
+
+                f_ordering = np.argsort(-clf.feature_importances_)  # descending order
+                self.f_ranks = np.argsort(f_ordering)
 
                 # prepare data to allow for monotonic slices
                 X_ = X.copy()
-                X_ = X_[:, self.f_ranks]  # reorder features based on importance
-                X = np.hstack((np.ones((n_instances, 1)), X_))
+                X_ = X_[:, f_ordering]  # reorder features based on importance
+                X_ = np.hstack((np.ones((n_instances, 1)), X_))
 
                 # prepare loss function
                 def logloss(w, X, y):
@@ -171,23 +182,26 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
                             optax.softmax_cross_entropy_with_integer_labels(
                                 X[:, : stage + 1] @ w[:, : stage + 1].T, y
                             ).mean()
-                            for stage in range(self.n_features)
+                            for stage in range(self.n_features + 1)
                         ]
-                    ) + self.n_features * self.l2 * jnp.mean(w ** 2)
+                    ) + self.l2 * sum(jnp.mean(w[:, : stage + 1] ** 2)for stage in range(self.n_features +1))
                 logloss_grad = grad(logloss)
 
                 model = Model()
                 loss = model.add_var(lb=0, name="loss")
                 [
-                    model.add_var(var_type=INTEGER, lb=-3, ub=3, name=f"w{j},{i}")
-                    for i in range(self.n_features + 1)
+                    model.add_var(var_type=INTEGER, lb=min(self.score_set), ub=max(self.score_set), name=f"w{j},{i}")
                     for j in range(self.n_classes)
+                    for i in range(self.n_features + 1)
                 ]
+
                 model.objective = minimize(loss)
                 model.max_mip_gap = 0.1
                 model.max_mip_gap_abs = 0.01
-                model.max_seconds = 30
+                model.max_seconds = 5
+                model.verbose = 0
 
+                t1_start = perf_counter() 
                 incumbent = None
                 incumbent_loss = float("inf")
                 with tqdm() as pbar:
@@ -199,8 +213,8 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
                         w_jnp = jnp.array(w_np)
 
                         # add cut
-                        f = float(logloss(w_jnp, X_, y))
-                        g = np.array(logloss_grad(w_jnp, X_, y)).flatten().astype(float)
+                        f = float(logloss(w_jnp, X_, y_))
+                        g = np.array(logloss_grad(w_jnp, X_, y_)).flatten().astype(float)
                         model += model.vars["loss"] >= f + xsum(
                             g[j] * (w_vars[j] - w[j]) for j in range(self.n_classes * (self.n_features + 1))
                         )
@@ -217,14 +231,28 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
                             f"Proxloss: {model.objective_value:.2f}, Loss: {f:.2f}, Gap: {opt_gap:.3f}, Incumbent: {incumbent_index}@{incumbent_loss:.2f}"
                         )
 
-                        if pbar.n - incumbent_index > 80:
+                        if pbar.n - incumbent_index > 80 or perf_counter() - t1_start > 300 or opt_gap<0.001:
                             print("No improvement for 100 iterations, stopping optimization.")
                             break
 
-                        if opt_gap < 0.02:
-                            model.max_mip_gap /= 1.5
+                        if pbar.n - incumbent_index > 60:
+                            # model.max_mip_gap /= 1.5
                             # model.max_mip_gap_abs = 0.0001
-                            continue
+                            model.max_mip_gap = 1e-2
+                            model.max_mip_gap_abs = 1e-2
+                            model.max_seconds = 20
+
+                        if opt_gap < 0.02:
+                            #model.max_mip_gap /= 1.5
+                            # model.max_mip_gap_abs = 0.0001
+                            model.max_mip_gap = 1e-4
+                            model.max_mip_gap_abs = 1e-10
+                            model.max_seconds = 150
+                            model.verbose = 1
+
+
+                # bias, most import feature...
+                # bias, f1, f2, f3
                 self.scores = incumbent.astype(int)[:,[0] + (1 + self.f_ranks).tolist()]
 
             case "ga":
@@ -400,11 +428,12 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
 
 
 if __name__ == '__main__':
-    from sklearn.datasets import load_iris
+    from sklearn.datasets import fetch_openml
 
-    data = load_iris()
-    X, y = data.data, data.target
+    data = fetch_openml(data_id=46764)
+    X, y = data.data.values, data.target.values
     clf = MulticlassScoringList(score_set=set(range(-3, 4)),  # cascade_loss=lambda x: x[-1]
-                                method="greedy", lookahead=1, n_jobs=12).fit(X, y)
-    print(clf.inspect(data.feature_names, data.target_names))
-    clf.predict(X)
+                                method="mip", lookahead=1, l2=1e-5, n_jobs=12).fit(X, y)
+    #print(clf.inspect(data.feature_names, data.target_names))
+    print(np.array([log_loss(y, clf_.predict_proba(X)) for clf_ in clf])
+          .sum())
