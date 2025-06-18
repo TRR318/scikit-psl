@@ -194,14 +194,6 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
                     for j in range(self.n_classes)
                     for i in range(self.n_features + 1)
                 ]
-                for w in product([min(min(self.score_set), max(self.score_set))], repeat=self.n_features+1):
-                    w_np = np.repeat([w],repeats=self.n_classes, axis=0).astype(float)
-                    w_jnp = jnp.array(w_np)
-                    f = float(logloss(w_jnp, X_, y_))
-                    g = np.array(logloss_grad(w_jnp, X_, y_)).flatten().astype(float)
-                    model += model.vars["loss"] >= f + xsum(
-                        g[j] * (model.vars[j+1] - w[j%(self.n_features+1)]) for j in range(self.n_classes * (self.n_features + 1))
-                    )
 
                 model.objective = minimize(loss)
                 model.max_mip_gap = 0.1
