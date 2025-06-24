@@ -198,7 +198,7 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
                 model.objective = minimize(loss)
                 model.max_mip_gap = 0.1
                 model.max_mip_gap_abs = 0.01
-                model.max_seconds = 5
+                model.max_seconds = 1
                 model.verbose = 0
 
                 t1_start = perf_counter() 
@@ -231,16 +231,9 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
                             f"Proxloss: {model.objective_value:.2f}, Loss: {f:.2f}, Gap: {opt_gap:.3f}, Incumbent: {incumbent_index}@{incumbent_loss:.2f}"
                         )
 
-                        if pbar.n - incumbent_index > 80 or perf_counter() - t1_start > 300 or opt_gap<0.001:
+                        if pbar.n - incumbent_index > 80 or perf_counter() - t1_start > 11 * 60 or opt_gap < 0.001:
                             print("No improvement for 100 iterations, stopping optimization.")
                             break
-
-                        if pbar.n - incumbent_index > 60:
-                            # model.max_mip_gap /= 1.5
-                            # model.max_mip_gap_abs = 0.0001
-                            model.max_mip_gap = 1e-2
-                            model.max_mip_gap_abs = 1e-2
-                            model.max_seconds = 20
 
                         if opt_gap < 0.02:
                             #model.max_mip_gap /= 1.5
@@ -249,7 +242,16 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
                             model.max_mip_gap_abs = 1e-10
                             model.max_seconds = 150
                             model.verbose = 1
-
+                        elif pbar.n - incumbent_index > 60 or opt_gap < 0.03:
+                            # model.max_mip_gap /= 1.5
+                            # model.max_mip_gap_abs = 0.0001
+                            model.max_mip_gap = 1e-2
+                            model.max_mip_gap_abs = 1e-2
+                            model.max_seconds = 20
+                        elif opt_gap < .5:
+                            # finish initialization phase.
+                            # added sufficient constraints where proxy loss does not allow trivial solutions with loss=0
+                            model.max_seconds = 5
 
                 # bias, most import feature...
                 # bias, f1, f2, f3
