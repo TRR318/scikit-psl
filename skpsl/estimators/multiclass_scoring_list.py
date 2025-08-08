@@ -9,7 +9,6 @@ from time import perf_counter
 import numpy as np
 import pandas as pd
 from joblib.parallel import delayed, Parallel
-from ml_dtypes import float8_e3m4
 from pygad import pygad
 from scipy.special import softmax
 from scipy.stats import rankdata, truncnorm
@@ -21,7 +20,8 @@ from sklearn.metrics import log_loss, accuracy_score
 from sklearn.preprocessing import LabelBinarizer
 from tqdm import tqdm
 import optax
-from mip import Model, xsum, INTEGER, minimize
+from mip import Model, xsum, INTEGER, minimize, ConstrsGenerator
+from mip.constants import OptimizationStatus
 from jax import numpy as jnp
 from jax import grad
 
@@ -32,7 +32,7 @@ LOGGER = logging.getLogger(__name__)
 
 class MulticlassScoringList(ClassifierMixin, BaseEstimator):
 
-    def __init__(self, score_set, method=None, cascade_loss=None, random_state=None, ga_params=None, lookahead=1, **kwargs):
+    def __init__(self, score_set, method=None, cascade_loss=None, random_state=None, ga_params=None,mip_params=None, lookahead=1, **kwargs):
         """
         :param score_set:
         :param cascade_loss: function to aggregate the stage losses
@@ -56,10 +56,12 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
         self.n_features = None
         self.ga_instance = None
         self.stage = None
-        self.l2 = kwargs.get("l2", 0)
+        self.l2 = kwargs.get("l2", 1e-5)
         self.n_jobs = kwargs.get("n_jobs", 1)
         ga_default = dict(maxiter=50, popsize=10, init_pop_factor=1, init_pop_noise=.2, parents_mating=5)
         self.ga_params_ = ga_default | ga_params if ga_params is not None else None
+        mip_default = dict(thresh=.01)
+        self.mip_params_ = mip_default | mip_params if mip_params is not None else None
         match cascade_loss:
             case None:
                 self.cascade_loss_ = sum
@@ -187,6 +189,41 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
                     ) + self.l2 * sum(jnp.mean(w[:, : stage + 1] ** 2)for stage in range(self.n_features +1))
                 logloss_grad = grad(logloss)
 
+                class LossCPAGenerator(ConstrsGenerator):
+                    def __init__(self, X, y, n_classes, n_features, pbar, thresh):
+                        super().__init__()
+                        self.X = X
+                        self.y = y
+                        self.n_classes = n_classes
+                        self.n_features = n_features
+                        self.pbar = pbar
+                        self.best_loss = float("inf")
+                        self.opt_gap = 1.0
+                        self.thresh = thresh
+
+                    def generate_constrs(self, model: Model, depth: int = 0, npass: int = 0):
+                        w_vars = list(model.vars)[1:]
+                        w = [var.x for var in w_vars]
+                        w_np = np.array(w).reshape(self.n_classes, -1)
+
+                        w_jnp = jnp.array(w_np)
+                        f = float(logloss(w_jnp, self.X, self.y))
+                        g = np.array(logloss_grad(w_jnp, self.X, self.y)).flatten().astype(float)
+
+                        optgap = 1- model.objective_value / f
+                        if optgap > self.thresh/4 and self.opt_gap > self.thresh:# and npass < 100 and depth < 5:
+                            model += model.vars["loss"] >= f + xsum(
+                                g[j] * (w_vars[j] - w[j]) for j in range(self.n_classes * (self.n_features + 1))
+                            )
+
+                        self.pbar.update()
+                        if not model.fractional:
+                            self.best_loss = min(self.best_loss,f)
+                            self.opt_gap =  1- model.objective_value / self.best_loss
+                        self.pbar.set_description(
+                                f"Proxloss: {model.objective_value:.2f}, Loss: {f:.2f}, mipgap: {optgap}, global optgap: {self.opt_gap}"
+                        )
+
                 model = Model()
                 loss = model.add_var(lb=0, name="loss")
                 [
@@ -194,68 +231,34 @@ class MulticlassScoringList(ClassifierMixin, BaseEstimator):
                     for j in range(self.n_classes)
                     for i in range(self.n_features + 1)
                 ]
-
+                model += loss >= 0
                 model.objective = minimize(loss)
-                model.max_mip_gap = 0.1
-                model.max_mip_gap_abs = 0.01
-                model.max_seconds = 1
-                model.verbose = 0
+                #model.max_mip_gap = 1e-1
+                #model.max_mip_gap_abs = 1e-1
+                model.max_seconds = 1800
+                #model.lp_method = 3
+                #model.cut_passes = 1000
+                model.verbose = 1
+                #model.max_nodes = 5
+                #model.threads = 6
+                #model.emphasis = 1
 
-                t1_start = perf_counter() 
-                incumbent = None
-                incumbent_loss = float("inf")
-                with tqdm() as pbar:
-                    while True:
-                        model.optimize()
-                        w_vars = list(model.vars)[1:]
-                        w = [var.x for var in w_vars]
-                        w_np = np.array(w).reshape(self.n_classes, -1)
-                        w_jnp = jnp.array(w_np)
-
-                        # add cut
-                        f = float(logloss(w_jnp, X_, y_))
-                        g = np.array(logloss_grad(w_jnp, X_, y_)).flatten().astype(float)
-                        model += model.vars["loss"] >= f + xsum(
-                            g[j] * (w_vars[j] - w[j]) for j in range(self.n_classes * (self.n_features + 1))
-                        )
-
-                        # keep incumbent (best real loss!)
-                        if f < incumbent_loss:
-                            incumbent = w_np.copy()
-                            incumbent_loss = f
-                            incumbent_index = pbar.n + 1
-
-                        opt_gap = 1 - model.vars["loss"].x / incumbent_loss
-                        pbar.update()
-                        pbar.set_description(
-                            f"Proxloss: {model.objective_value:.2f}, Loss: {f:.2f}, Gap: {opt_gap:.3f}, Incumbent: {incumbent_index}@{incumbent_loss:.2f}"
-                        )
-
-                        if pbar.n - incumbent_index > 80 or perf_counter() - t1_start > 11 * 60 or opt_gap < 0.001:
-                            print("No improvement for 100 iterations, stopping optimization.")
-                            break
-
-                        if opt_gap < 0.02:
-                            #model.max_mip_gap /= 1.5
-                            # model.max_mip_gap_abs = 0.0001
-                            model.max_mip_gap = 1e-4
-                            model.max_mip_gap_abs = 1e-10
-                            model.max_seconds = 150
-                            model.verbose = 1
-                        elif pbar.n - incumbent_index > 60 or opt_gap < 0.03:
-                            # model.max_mip_gap /= 1.5
-                            # model.max_mip_gap_abs = 0.0001
-                            model.max_mip_gap = 1e-2
-                            model.max_mip_gap_abs = 1e-2
-                            model.max_seconds = 20
-                        elif opt_gap < .5:
-                            # finish initialization phase.
-                            # added sufficient constraints where proxy loss does not allow trivial solutions with loss=0
-                            model.max_seconds = 5
+                cut_gen = LossCPAGenerator(X_, y_, self.n_classes, self.n_features, tqdm(), thresh=self.mip_params_.get("thresh"))
+                # create cuts for fractional solutions
+                model.cuts_generator = cut_gen
+                # create cuts for infeasible solutions
+                model.lazy_constrs_generator = cut_gen
+                model.optimize()
+                while model.status == OptimizationStatus.NO_SOLUTION_FOUND:
+                    print("didnt find a solution. disabling additional constraints and restarting")
+                    model.cuts_generator = None
+                    #model.lazy_constrs_generator = None
+                    model.optimize()
 
                 # bias, most import feature...
                 # bias, f1, f2, f3
-                self.scores = incumbent.astype(int)[:,[0] + (1 + self.f_ranks).tolist()]
+                w = [var.x for var in list(model.vars)[1:]]
+                self.scores = np.array(w).reshape(self.n_classes, -1).astype(int)[:,[0] + (1 + self.f_ranks).tolist()]
 
             case "ga":
                 # fit lr as a seed for the genetic search
@@ -435,7 +438,7 @@ if __name__ == '__main__':
     data = fetch_openml(data_id=46764)
     X, y = data.data.values, data.target.values
     clf = MulticlassScoringList(score_set=set(range(-3, 4)),  # cascade_loss=lambda x: x[-1]
-                                method="mip", lookahead=1, l2=1e-5, n_jobs=12).fit(X, y)
+                                method="greedy", lookahead=1,mip_params=dict(thresh=.1) ).fit(X, y)
     #print(clf.inspect(data.feature_names, data.target_names))
     print(np.array([log_loss(y, clf_.predict_proba(X)) for clf_ in clf])
           .sum())
